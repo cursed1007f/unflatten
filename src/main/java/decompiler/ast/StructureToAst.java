@@ -130,7 +130,25 @@ public final class StructureToAst {
                 Ast.Expr cond = condFrom(condIdx);
                 List<Ast.Stmt> thenSt = node.thenBranch() != null ? nodeToStmts(node.thenBranch()) : new ArrayList<>();
                 List<Ast.Stmt> elseSt = node.elseBranch() != null ? nodeToStmts(node.elseBranch()) : new ArrayList<>();
-                out.add(new Ast.If(cond, thenSt, elseSt.isEmpty() ? null : elseSt));
+                // Свёртка непрозрачных предикатов обфускатора (1*1+1%2 != 0 и т.п.).
+                // Если условие константно, подставляем взятую ветвь. False-ветвь
+                // (else) — это ложный путь = продолжение/эпилог, поэтому дописываем
+                // её после взятой ветви только если та не терминирует (return/throw).
+                Object cv = Ast.constValue(cond);
+                if (cv instanceof Boolean b) {
+                    if (b) {
+                        out.addAll(thenSt);
+                        boolean terminated = !thenSt.isEmpty() && (
+                                thenSt.get(thenSt.size() - 1) instanceof Ast.Return
+                                || (thenSt.get(thenSt.size() - 1) instanceof Ast.ExprStmt es0
+                                    && es0.expr() instanceof Ast.Call c0 && "throw".equals(c0.name())));
+                        if (!elseSt.isEmpty() && !terminated) out.addAll(elseSt);
+                    } else {
+                        out.addAll(elseSt);
+                    }
+                } else {
+                    out.add(new Ast.If(cond, thenSt, elseSt.isEmpty() ? null : elseSt));
+                }
             }
         }
     }
@@ -162,6 +180,13 @@ public final class StructureToAst {
         // try-body: С‚РµР»Рѕ РЅР°С€РµРіРѕ Р±Р»РѕРєР° + С‚РµР»Рѕ handler'Р° РєР°Рє catch
         // (СѓРїСЂРѕС‰С‘РЅРЅРѕ: try-body вЂ” С‚РµРєСѓС‰РёР№ Р±Р»РѕРє, catch вЂ” Р±Р»РѕРє handler'Р°)
         List<Ast.Stmt> tryBody = blockToStmt(blockIndex);
+        // Анти-тампер обфускатора: `try { } catch (Throwable e) { return <dead>; throw(0); }`
+        // при ПУСТОМ try — весь конструкт мёртв (catch недостижим). Выкидываем его,
+        // пометив handler потреблённым, чтобы он не напечатался отдельным блоком.
+        if (tryBody.isEmpty()) {
+            switchConsumed.add(handlerBlock);
+            return null;
+        }
         List<Ast.Stmt> catchBody = handlerBlock < blocks.size() ? blockToStmt(handlerBlock) : new ArrayList<>();
         // РїРѕРјРµС‚РёС‚СЊ handler-Р±Р»РѕРє РїРѕС‚СЂРµР±Р»С‘РЅРЅС‹Рј, С‡С‚РѕР±С‹ РЅРµ РїРµС‡Р°С‚Р°Р»СЃСЏ РїРѕРІС‚РѕСЂРЅРѕ
         switchConsumed.add(handlerBlock);

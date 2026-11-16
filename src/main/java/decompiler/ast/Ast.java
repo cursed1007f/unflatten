@@ -210,4 +210,96 @@ public final class Ast {
             default -> "Object";
         }) + suffix;
     }
+
+    /**
+     * Свёртка константного выражения (для непрозрачных предикатов обфускатора,
+     * вида {@code 1 * 1 + 1 % 2 != 0}).
+     *
+     * @return значение (Integer/Long/Double/Boolean) либо {@code null}, если
+     *         выражение не является константным
+     */
+    static Object constValue(Expr e) {
+        if (e == null) return null;
+        if (e instanceof Literal l) {
+            Object v = l.value();
+            return (v instanceof Number || v instanceof Boolean || v instanceof String) ? v : null;
+        }
+        if (e instanceof Unary u) {
+            Object v = constValue(u.operand());
+            if (v == null) return null;
+            if (u.op().equals("!") && v instanceof Boolean b) return !b;
+            if (u.op().equals("-") && v instanceof Number n) {
+                if (n instanceof Double || n instanceof Float) return -n.doubleValue();
+                if (n instanceof Long) return -n.longValue();
+                return -n.intValue();
+            }
+            if (u.op().equals("~") && v instanceof Number n) return ~n.intValue();
+            return null;
+        }
+        if (e instanceof Binary b) {
+            Object l = constValue(b.left());
+            Object r = constValue(b.right());
+            if (l == null || r == null) return null;
+            return applyConst(b.op(), l, r);
+        }
+        return null;
+    }
+
+    private static Object applyConst(String op, Object l, Object r) {
+        if (l instanceof Boolean lb && r instanceof Boolean rb) {
+            if (op.equals("&&")) return lb && rb;
+            if (op.equals("||")) return lb || rb;
+            if (op.equals("==")) return lb.equals(rb);
+            if (op.equals("!=")) return !lb.equals(rb);
+            return null;
+        }
+        if (!(l instanceof Number) || !(r instanceof Number)) return null;
+        // сравнения
+        if (op.equals("==") || op.equals("!=") || op.equals("<") || op.equals("<=")
+                || op.equals(">") || op.equals(">=")) {
+            double a = ((Number) l).doubleValue();
+            double b = ((Number) r).doubleValue();
+            return switch (op) {
+                case "==" -> a == b;
+                case "!=" -> a != b;
+                case "<" -> a < b;
+                case "<=" -> a <= b;
+                case ">" -> a > b;
+                default -> a >= b;
+            };
+        }
+        // арифметика с плавающей точкой
+        if (l instanceof Double || r instanceof Double || l instanceof Float || r instanceof Float) {
+            double a = ((Number) l).doubleValue();
+            double b = ((Number) r).doubleValue();
+            return switch (op) {
+                case "+" -> a + b;
+                case "-" -> a - b;
+                case "*" -> a * b;
+                case "/" -> b == 0 ? null : a / b;
+                case "%" -> b == 0 ? null : a % b;
+                default -> null;
+            };
+        }
+        // целочисленная арифметика
+        boolean useLong = l instanceof Long || r instanceof Long;
+        long a = ((Number) l).longValue();
+        long b = ((Number) r).longValue();
+        long res;
+        switch (op) {
+            case "+" -> res = a + b;
+            case "-" -> res = a - b;
+            case "*" -> res = a * b;
+            case "/" -> { if (b == 0) return null; res = a / b; }
+            case "%" -> { if (b == 0) return null; res = a % b; }
+            case "&" -> res = a & b;
+            case "|" -> res = a | b;
+            case "^" -> res = a ^ b;
+            case "<<" -> res = a << b;
+            case ">>" -> res = a >> b;
+            case ">>>" -> res = a >>> b;
+            default -> { return null; }
+        }
+        return useLong ? (Object) res : (Object) (int) res;
+    }
 }
