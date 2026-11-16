@@ -29,8 +29,13 @@ public final class JavaClassPrinter {
     private JavaClassPrinter() {
     }
 
-    /** Печатает класс целиком. */
+    /** Печатает класс целиком (без расшифровки строк). */
     public static String printClass(ClassNode cn) {
+        return printClass(cn, null);
+    }
+
+    /** Печатает класс целиком; дешифратор (может быть null) расшифровывает строки. */
+    public static String printClass(ClassNode cn, StringDecryptor decryptor) {
         StringBuilder sb = new StringBuilder();
         // заголовок
         sb.append(classDeclaration(cn)).append(" {\n\n");
@@ -50,7 +55,7 @@ public final class JavaClassPrinter {
         // методы
         if (cn.methods != null) {
             for (MethodNode mn : cn.methods) {
-                sb.append(methodToJava(cn, mn));
+                sb.append(methodToJava(cn, mn, decryptor));
                 sb.append("\n");
             }
         }
@@ -60,6 +65,10 @@ public final class JavaClassPrinter {
 
     /** Модификаторы + type + name для одного метода + тело. */
     static String methodToJava(ClassNode cn, MethodNode mn) {
+        return methodToJava(cn, mn, null);
+    }
+
+    static String methodToJava(ClassNode cn, MethodNode mn, StringDecryptor decryptor) {
         StringBuilder sb = new StringBuilder("    ");
         // модификаторы
         if ((mn.access & Opcodes.ACC_PUBLIC) != 0) sb.append("public ");
@@ -77,7 +86,7 @@ public final class JavaClassPrinter {
                 : mn.name.equals("<clinit>") ? null : mn.name;
         // clinit (static init) печатаем как блок
         if (mn.name.equals("<clinit>")) {
-            return staticInitBlock(mn);
+            return staticInitBlock(mn, decryptor, cn.name);
         }
 
         sb.append(name == null ? "" : ret(desc(ret)) + " " + name);
@@ -94,13 +103,13 @@ public final class JavaClassPrinter {
             return sb.toString();
         }
         sb.append(" {\n");
-        sb.append(bodyOf(mn));
+        sb.append(bodyOf(mn, decryptor, cn.name));
         sb.append("    }\n");
         return sb.toString();
     }
 
     /** Тело метода (пусто, если без байткода). */
-    private static String bodyOf(MethodNode mn) {
+    private static String bodyOf(MethodNode mn, StringDecryptor decryptor, String classOwner) {
         if (mn.instructions == null || mn.instructions.size() == 0) return "        \n";
         var blocks = CfgBuilder.build(mn);
         var deflat = CffUnflattenerPass.run(blocks);
@@ -112,14 +121,14 @@ public final class JavaClassPrinter {
         var rec = StructureRecoverer.forGraph(blocks);
         int entry = blocks.isEmpty() ? -1 : blocks.get(0).index();
         var root = rec.build(entry);
-        var ast = new StructureToAst(blocks, mn, cffDispatch).convert(root);
+        var ast = new StructureToAst(blocks, mn, cffDispatch, decryptor, classOwner).convert(root);
         // печатаем с отступами (4 пробела базово)
         String body = JavaPrinter.print(ast);
         return indent(body, 8);
     }
 
-    private static String staticInitBlock(MethodNode mn) {
-        String body = bodyOf(mn);
+    private static String staticInitBlock(MethodNode mn, StringDecryptor decryptor, String classOwner) {
+        String body = bodyOf(mn, decryptor, classOwner);
         return "    static {\n" + body + "    }\n";
     }
 

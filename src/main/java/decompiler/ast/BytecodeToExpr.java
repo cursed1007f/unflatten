@@ -35,10 +35,17 @@ public final class BytecodeToExpr {
     private final Ast.VarNameResolver names;
     /** Тип слота -> имя (заполняется извне анализатором типов). */
     private final String[] slotTypes;
+    private final StringDecryptor decryptor; // может быть null — строки не расшифровываются
 
     public BytecodeToExpr(Ast.VarNameResolver names, String[] slotTypes) {
+        this(names, slotTypes, null);
+    }
+
+    /** Полный конструктор с опциональным дешифратором строк. */
+    public BytecodeToExpr(Ast.VarNameResolver names, String[] slotTypes, StringDecryptor decryptor) {
         this.names = names;
         this.slotTypes = slotTypes;
+        this.decryptor = decryptor;
     }
 
     /** Упрощённый конструктор без типов (имена по слотам). */
@@ -304,6 +311,28 @@ public final class BytecodeToExpr {
     }
 
     private void doCall(MethodInsnNode m) {
+        // --- распознавание дешифратора строк: LDC class; LDC idx; a(String,I)String ---
+        if (m.getOpcode() == Opcodes.INVOKESTATIC
+                && m.name.equals("a")
+                && m.desc.equals("(Ljava/lang/String;I)Ljava/lang/String;")) {
+            Ast.Expr idxExpr = pop();
+            Ast.Expr clsExpr = pop();
+            String className = literalString(clsExpr);
+            Integer index = literalInt(idxExpr);
+            if (className != null && index != null) {
+                if (decryptor != null) {
+                    String s = decryptor.decrypt(className, index);
+                    if (s != null) {
+                        stack.push(new Ast.Literal(s));
+                        return;
+                    }
+                }
+                // ключа нет или класс не загружен — помечаем как зашифрованную строку
+                stack.push(new Ast.Literal("<!-- enc:" + className + "#" + index + " -->"));
+                return;
+            }
+        }
+
         List<Ast.Expr> args = new ArrayList<>();
         int argc = argsCount(m.desc);
         for (int i = 0; i < argc; i++) args.add(0, pop());
@@ -315,6 +344,18 @@ public final class BytecodeToExpr {
         } else {
             stack.push(call);
         }
+    }
+
+    /** Если выражение — строковый литерал, возвращает его значение; иначе null. */
+    private static String literalString(Ast.Expr e) {
+        if (e instanceof Ast.Literal l && l.value() instanceof String s) return s;
+        return null;
+    }
+
+    /** Если выражение — целочисленный литерал, возвращает Integer; иначе null. */
+    private static Integer literalInt(Ast.Expr e) {
+        if (e instanceof Ast.Literal l && l.value() instanceof Number n) return n.intValue();
+        return null;
     }
 
     private int argsCount(String desc) {

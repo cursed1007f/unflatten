@@ -2,6 +2,7 @@ package decompiler.cli;
 
 import decompiler.ast.JavaClassPrinter;
 import decompiler.ast.JavaExporter;
+import decompiler.ast.StringDecryptor;
 import decompiler.cfganalyzer.CfgBuilder;
 import decompiler.cfganalyzer.CfgDumper;
 import decompiler.dumper.ClassStructureDumper;
@@ -57,6 +58,7 @@ public final class Main {
         boolean structureMode = false;
         boolean astMode = false;
         String exportDir = null;
+        Path keyPath = null;
         for (int i = 1; i < args.length; i++) {
             if (args[i].equals("--cfg")) cfgMode = true;
             if (args[i].equals("--ssa")) ssaMode = true;
@@ -67,14 +69,33 @@ public final class Main {
                 exportDir = args[i + 1];
                 i++;
             }
+            if (args[i].equals("--key") && i + 1 < args.length) {
+                keyPath = Path.of(args[i + 1]);
+                i++;
+            }
+        }
+
+        // дешифратор строк: создаём только если задан --key
+        StringDecryptor decryptor = null;
+        try {
+            if (keyPath != null && Files.isRegularFile(keyPath)) {
+                decryptor = StringDecryptor.fromKeyFile(keyPath.toFile());
+                // загрузить .dat из самого jar
+                decryptor.load(findDatResource(jar));
+                System.err.println("Строки будут расшифрованы (ключ: " + keyPath + ")");
+            } else if (keyPath != null) {
+                System.err.println("Предупреждение: --key файл не найден, строки будут помечены, не расшифрованы");
+            }
+        } catch (Exception ex) {
+            System.err.println("Предупреждение: не удалось инициализировать дешифратор строк: " + ex);
         }
 
         try {
             if (exportDir != null) {
-                var res = JavaExporter.export(jar, Path.of(exportDir));
+                var res = JavaExporter.export(jar, Path.of(exportDir), decryptor);
                 System.err.printf("Exported %d class(es) (errors=%d) to %s%n", res.classes, res.errors, res.outDir);
             } else if (astMode) {
-                int n = runAst(jar);
+                int n = runAst(jar, decryptor);
                 System.err.printf("Java AST generated for %d method(s) from %s%n", n, jar);
             } else if (structureMode) {
                 int n = runStructure(jar);
@@ -199,13 +220,13 @@ public final class Main {
     }
 
     /** Генерация Java-кода: печать полного класса (поля + методы через пайплайн). */
-    private static int runAst(Path jar) throws Exception {
+    private static int runAst(Path jar, StringDecryptor decryptor) throws Exception {
         final int[] methods = {0};
         JarParser.parse(jar, (p, entry, node) -> {
             ClassNode cn = node;
             System.out.println("// ===== " + entry + " =====");
             try {
-                System.out.print(JavaClassPrinter.printClass(cn));
+                System.out.print(JavaClassPrinter.printClass(cn, decryptor));
             } catch (Exception ex) {
                 System.out.println("  // class: " + ex);
             }
@@ -222,5 +243,23 @@ public final class Main {
             sb.append("    BB").append(e[0]).append(" -> BB").append(e[1]).append('\n');
         }
         System.out.print(sb);
+    }
+
+    /** Ищет .dat-ресурс со строками в корне jar и возвращает его байты (или null). */
+    private static byte[] findDatResource(Path jar) throws Exception {
+        try (var zf = new java.util.jar.JarFile(jar.toFile())) {
+            var en = zf.entries();
+            while (en.hasMoreElements()) {
+                var e = en.nextElement();
+                if (e.isDirectory()) continue;
+                String n = e.getName();
+                // ищем одиночный .dat в корне (не в подпапках метаданных)
+                if (n.endsWith(".dat") && !n.contains("/")
+                        && !n.startsWith("META-INF")) {
+                    return zf.getInputStream(e).readAllBytes();
+                }
+            }
+        }
+        return null;
     }
 }
