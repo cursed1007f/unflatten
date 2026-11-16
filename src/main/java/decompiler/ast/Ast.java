@@ -189,11 +189,15 @@ public final class Ast {
     static String friendlyType(String desc) {
         if (desc == null) return "Object";
         String d = desc;
-        while (d.startsWith("[")) d = d.substring(1);
+        int dims = 0;
+        while (d.startsWith("[")) { d = d.substring(1); dims++; }
+        String suffix = "[]".repeat(dims);
         if (d.startsWith("L") && d.endsWith(";")) {
-            return d.substring(1, d.length() - 1).replace('/', '.');
+            String internal = d.substring(1, d.length() - 1);
+            String renamed = ClassRenamer.renameInternal(internal);
+            return renamed.replace('/', '.') + suffix;
         }
-        return switch (d) {
+        return (switch (d) {
             case "I" -> "int";
             case "J" -> "long";
             case "Z" -> "boolean";
@@ -204,6 +208,6 @@ public final class Ast {
             case "C" -> "char";
             case "V" -> "void";
             default -> "Object";
-        };
+        }) + suffix;
     }
 }

@@ -135,7 +135,16 @@ public final class BytecodeToExpr {
             case Opcodes.FCONST_0 -> stack.push(new Ast.Literal(0.0f));
             case Opcodes.DCONST_0 -> stack.push(new Ast.Literal(0.0d));
             case Opcodes.BIPUSH, Opcodes.SIPUSH -> stack.push(new Ast.Literal(((IntInsnNode) n).operand));
-            case Opcodes.LDC -> stack.push(new Ast.Literal(((LdcInsnNode) n).cst));
+            case Opcodes.LDC -> {
+                Object cst = ((LdcInsnNode) n).cst;
+                if (cst instanceof org.objectweb.asm.Type t) {
+                    // класс-литерал: Foo.class (через карту переименований)
+                    String typeName = Ast.friendlyType(t.getDescriptor());
+                    stack.push(new Ast.Field(null, typeName + ".class", true));
+                } else {
+                    stack.push(new Ast.Literal(cst));
+                }
+            }
             // --- локальные ---
             case Opcodes.ILOAD, Opcodes.LLOAD, Opcodes.FLOAD, Opcodes.DLOAD, Opcodes.ALOAD -> {
                 int var = ((VarInsnNode) n).var;

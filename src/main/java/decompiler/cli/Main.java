@@ -107,6 +107,13 @@ public final class Main {
             hierarchy = null;
         }
 
+        // переименование обфусцированных классов в осмысленные имена (пункт 1)
+        try {
+            decompiler.ast.ClassRenamer.build(jar);
+        } catch (Exception ex) {
+            System.err.println("Предупреждение: переименование классов не удалось: " + ex);
+        }
+
         try {
             if (exportDir != null) {
                 var res = JavaExporter.export(jar, Path.of(exportDir), decryptor, hierarchy);
@@ -244,7 +251,11 @@ public final class Main {
         final int[] methods = {0};
         JarParser.parse(jar, (p, entry, node) -> {
             ClassNode cn = node;
-            System.out.println("// ===== " + entry + " =====");
+            // заголовок-комментарий: показываем переименованный путь, если есть
+            String internal = entry.endsWith(".class")
+                    ? entry.substring(0, entry.length() - 6) : entry;
+            String display = decompiler.ast.ClassRenamer.renameInternal(internal);
+            System.out.println("// ===== " + display + ".class =====");
             try {
                 System.out.print(JavaClassPrinter.printClass(cn, decryptor, hierarchy));
             } catch (Exception ex) {

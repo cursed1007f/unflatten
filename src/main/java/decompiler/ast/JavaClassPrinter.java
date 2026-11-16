@@ -175,6 +175,8 @@ public final class JavaClassPrinter {
     }
 
     private static String simpleName(String internal) {
+        // если класс переименован ClassRenamer'ом — используем осмысленное имя
+        if (ClassRenamer.isRenamed(internal)) return ClassRenamer.simpleNameOf(internal);
         int i = internal.lastIndexOf('/');
         return i >= 0 ? internal.substring(i + 1) : internal;
     }
