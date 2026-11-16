@@ -32,6 +32,8 @@ public final class JavaPrinter {
             }
         } else if (s instanceof Ast.Assign a) {
             pad(); sb.append(expr(a.target())).append(" = ").append(expr(a.value())).append(";\n");
+        } else if (s instanceof Ast.ExprStmt es) {
+            pad(); sb.append(expr(es.expr())).append(";\n");
         } else if (s instanceof Ast.If i) {
             pad(); sb.append("if (").append(expr(i.cond())).append(") {\n");
             indent++;

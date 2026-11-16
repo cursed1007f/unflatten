@@ -207,6 +207,84 @@ public final class BytecodeToExpr {
                         ? new Ast.Binary("==", v, new Ast.NullLit())
                         : new Ast.Binary("!=", v, new Ast.NullLit()));
             }
+            // --- массивы ---
+            case Opcodes.IALOAD, Opcodes.LALOAD, Opcodes.FALOAD, Opcodes.DALOAD, Opcodes.AALOAD,
+                 Opcodes.BALOAD, Opcodes.CALOAD, Opcodes.SALOAD -> {
+                Ast.Expr idx = pop();
+                Ast.Expr arr = pop();
+                stack.push(new Ast.Binary("[]", arr, idx)); // arr[idx]
+            }
+            case Opcodes.IASTORE, Opcodes.LASTORE, Opcodes.FASTORE, Opcodes.DASTORE, Opcodes.AASTORE,
+                 Opcodes.BASTORE, Opcodes.CASTORE, Opcodes.SASTORE -> {
+                Ast.Expr val = pop();
+                Ast.Expr idx = pop();
+                Ast.Expr arr = pop();
+                stmts.add(new Ast.ExprStmt(new Ast.Binary("[]=", arr, new Ast.Binary("[]", idx, val))));
+            }
+            case Opcodes.ARRAYLENGTH -> {
+                Ast.Expr arr = pop();
+                stack.push(new Ast.Call(arr, "length", List.of(), false));
+            }
+            case Opcodes.NEWARRAY -> {
+                Ast.Expr size = pop();
+                int atype = ((org.objectweb.asm.tree.IntInsnNode) n).operand;
+                stack.push(new Ast.NewObject("[" + arrayTypeName(atype), List.of(size)));
+            }
+            case Opcodes.ANEWARRAY -> {
+                Ast.Expr size = pop();
+                TypeInsnNode t = (TypeInsnNode) n;
+                stack.push(new Ast.NewObject("L" + t.desc + ";[]", List.of(size)));
+            }
+            case Opcodes.MULTIANEWARRAY -> {
+                // размерностей может быть несколько — упрощённо берём последний
+                Ast.Expr size = pop();
+                TypeInsnNode t = (TypeInsnNode) n;
+                stack.push(new Ast.NewObject(t.desc, List.of(size)));
+            }
+            // --- касты и проверки ---
+            case Opcodes.CHECKCAST -> {
+                TypeInsnNode t = (TypeInsnNode) n;
+                Ast.Expr v = pop();
+                stack.push(new Ast.Call(v, "cast", List.of(new Ast.Var(Ast.friendlyType(t.desc))), false));
+            }
+            case Opcodes.INSTANCEOF -> {
+                TypeInsnNode t = (TypeInsnNode) n;
+                Ast.Expr v = pop();
+                stack.push(new Ast.Binary("instanceof", v, new Ast.Var(Ast.friendlyType(t.desc))));
+            }
+            // --- конвертации int/long/float/double ---
+            case Opcodes.I2L -> conv("(long)");
+            case Opcodes.I2F -> conv("(float)");
+            case Opcodes.I2D -> conv("(double)");
+            case Opcodes.L2I -> conv("(int)");
+            case Opcodes.L2F -> conv("(float)");
+            case Opcodes.L2D -> conv("(double)");
+            case Opcodes.F2I -> conv("(int)");
+            case Opcodes.F2L -> conv("(long)");
+            case Opcodes.F2D -> conv("(double)");
+            case Opcodes.D2I -> conv("(int)");
+            case Opcodes.D2L -> conv("(long)");
+            case Opcodes.D2F -> conv("(float)");
+            case Opcodes.I2B -> conv("(byte)");
+            case Opcodes.I2C -> conv("(char)");
+            case Opcodes.I2S -> conv("(short)");
+            // --- управление ---
+            case Opcodes.ATHROW -> {
+                Ast.Expr v = pop();
+                stmts.add(new Ast.ExprStmt(new Ast.Call(null, "throw", List.of(v), false)));
+                stack.clear();
+            }
+            case Opcodes.MONITORENTER, Opcodes.MONITOREXIT -> {
+                pop(); // монитор
+            }
+            case Opcodes.POP -> pop();
+            case Opcodes.POP2 -> { pop(); pop(); }
+            case Opcodes.SWAP -> {
+                Ast.Expr a = pop();
+                Ast.Expr b = pop();
+                stack.push(a);
+                stack.push(b);
+            }
             // --- return: берём верх стека и эмитим return ---
             case Opcodes.IRETURN, Opcodes.LRETURN, Opcodes.FRETURN, Opcodes.DRETURN, Opcodes.ARETURN -> {
                 Ast.Expr v = pop();
@@ -230,7 +308,13 @@ public final class BytecodeToExpr {
         int argc = argsCount(m.desc);
         for (int i = 0; i < argc; i++) args.add(0, pop());
         Ast.Expr target = m.getOpcode() == Opcodes.INVOKESTATIC ? null : pop();
-        stack.push(new Ast.Call(target, m.name, args, m.getOpcode() == Opcodes.INVOKESTATIC));
+        Ast.Call call = new Ast.Call(target, m.name, args, m.getOpcode() == Opcodes.INVOKESTATIC);
+        // void-вызов — оператор, а не значение
+        if (m.desc.endsWith(")V")) {
+            stmts.add(new Ast.ExprStmt(call));
+        } else {
+            stack.push(call);
+        }
     }
 
     private int argsCount(String desc) {
@@ -254,6 +338,26 @@ public final class BytecodeToExpr {
         Ast.Expr r = pop();
         Ast.Expr l = pop();
         stack.push(new Ast.Binary(op, l, r));
+    }
+
+    /** Конвертация типа: (targetType)operand. */
+    private void conv(String cast) {
+        stack.push(new Ast.Unary(cast, pop()));
+    }
+
+    /** Имя типа примитивного массива по opcode NEWARRAY (atype). */
+    private static String arrayTypeName(int atype) {
+        return switch (atype) {
+            case Opcodes.T_BOOLEAN -> "Z";
+            case Opcodes.T_CHAR -> "C";
+            case Opcodes.T_FLOAT -> "F";
+            case Opcodes.T_DOUBLE -> "D";
+            case Opcodes.T_BYTE -> "B";
+            case Opcodes.T_SHORT -> "S";
+            case Opcodes.T_INT -> "I";
+            case Opcodes.T_LONG -> "J";
+            default -> "";
+        };
     }
 
     private void un(String op) {

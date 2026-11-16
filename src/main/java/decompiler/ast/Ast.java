@@ -146,6 +146,10 @@ public final class Ast {
     public record Assign(Var target, Expr value) implements Stmt {
     }
 
+    /** Выражение как оператор (вызов void-метода, постфикс и т.п.). */
+    public record ExprStmt(Expr expr) implements Stmt {
+    }
+
     /** if (cond) { then } [else { else }] */
     public record If(Expr cond, List<Stmt> thenBranch, List<Stmt> elseBranch) implements Stmt {
     }

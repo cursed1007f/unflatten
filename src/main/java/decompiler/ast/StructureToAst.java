@@ -75,7 +75,8 @@ public final class StructureToAst {
             }
             case LOOP -> {
                 int header = node.loopHeader();
-                Ast.Expr cond = loopCond(header);
+                java.util.Set<Integer> bodyIdx = new java.util.HashSet<>(node.loopBody());
+                Ast.Expr cond = loopCond(header, bodyIdx);
                 List<Ast.Stmt> body = new ArrayList<>();
                 for (StructureNode c : node.children()) {
                     body.addAll(nodeToStmts(c));
@@ -173,11 +174,20 @@ public final class StructureToAst {
         return e == null ? new Ast.Literal(true) : e;
     }
 
-    private Ast.Expr loopCond(int header) {
+    private Ast.Expr loopCond(int header, java.util.Set<Integer> bodyIdx) {
         BasicBlock hdr = blocks.get(header);
         AbstractInsnNode term = hdr.getTerminator();
         if (term instanceof JumpInsnNode j && j.getOpcode() != Opcodes.GOTO) {
-            return condFrom(header);
+            Ast.Expr c = condFrom(header);
+            // Байткод цикла: header оканчивается условным переходом. Если его цель
+            // (куда прыгаем по j.label) НЕ лежит внутри тела — значит переход ведёт
+            // на выход из цикла при НЕвыполнении условия -> условие Java надо
+            // инвертировать (Java while крутится при истинном).
+            int jmpTarget = headerSuccessorByJump(hdr, j);
+            if (jmpTarget >= 0 && !bodyIdx.contains(jmpTarget)) {
+                return negate(c);
+            }
+            return c;
         }
         for (BasicBlock s : hdr.getSuccessors()) {
             AbstractInsnNode st = s.getTerminator();
@@ -186,6 +196,39 @@ public final class StructureToAst {
             }
         }
         return new Ast.Literal(true);
+    }
+
+    /** Преемник блока по условному переходу j (десериализация метки в индекс). */
+    private int headerSuccessorByJump(BasicBlock hdr, JumpInsnNode j) {
+        var byLabel = hdr.successorByLabel();
+        // successorByLabel ключи — метки switch; для jump — иначе
+        // просто находим преемник, чей первый label совпадает с j.label
+        for (BasicBlock s : hdr.getSuccessors()) {
+            if (s != null && !s.getInstructions().isEmpty()) {
+                // блок-преемник начинается с метки; сравниваем с j.label
+                if (s.getInstructions().get(0) == j.label) return s.index();
+            }
+        }
+        return -1;
+    }
+
+    /** Отрицание выражения-условия (инверсия оператора сравнения/&&/||). */
+    private Ast.Expr negate(Ast.Expr e) {
+        if (e instanceof Ast.Binary b) {
+            String op = switch (b.op()) {
+                case "==" -> "!=";
+                case "!=" -> "==";
+                case "<" -> ">=";
+                case ">" -> "<=";
+                case "<=" -> ">";
+                case ">=" -> "<";
+                case "&&" -> "||";
+                case "||" -> "&&";
+                default -> null;
+            };
+            if (op != null) return new Ast.Binary(op, b.left(), b.right());
+        }
+        return new Ast.Unary("!", e);
     }
 
     // ------------------------------------------------------------------ типы
