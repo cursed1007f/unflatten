@@ -35,6 +35,8 @@ public final class ObfuscationDetector {
         public int cffGate;
         public int opaquePredicates;
         public int conditionalBlocks;
+        public int totalBlocks;
+        public int gotoBlocks;
         public int encryptedStringCalls;
         public int antiTamperHandlers;
         public int obfuscatedClassNames;
@@ -53,6 +55,11 @@ public final class ObfuscationDetector {
               .append(" из ").append(conditionalBlocks).append(" условных блоков")
               .append(", шифрованных строк-вызовов: ").append(encryptedStringCalls)
               .append(", анти-тампер обработчиков: ").append(antiTamperHandlers).append('\n');
+            sb.append("блоков: ").append(totalBlocks)
+              .append(", GOTO-блоков: ").append(gotoBlocks)
+              .append(String.format(java.util.Locale.ROOT, " (%.1f%%)",
+                      totalBlocks == 0 ? 0.0 : 100.0 * gotoBlocks / totalBlocks))
+              .append('\n');
             return sb.toString();
         }
     }
@@ -93,12 +100,17 @@ public final class ObfuscationDetector {
                     }
                     // непрозрачные предикаты: условие блока свёртывается в константу
                     for (BasicBlock b : blocks) {
+                        p.totalBlocks++;
                         AbstractInsnNode term = b.getTerminator();
-                        if (term instanceof JumpInsnNode j && j.getOpcode() != Opcodes.GOTO) {
-                            p.conditionalBlocks++;
-                            BytecodeToExpr emu = new BytecodeToExpr(new Ast.VarNameResolver(0, 0));
-                            Ast.Expr cond = emu.runExpr(b.getInstructions());
-                            if (Ast.constValue(cond) instanceof Boolean) p.opaquePredicates++;
+                        if (term instanceof JumpInsnNode j) {
+                            if (j.getOpcode() == Opcodes.GOTO) {
+                                p.gotoBlocks++;
+                            } else {
+                                p.conditionalBlocks++;
+                                BytecodeToExpr emu = new BytecodeToExpr(new Ast.VarNameResolver(0, 0));
+                                Ast.Expr cond = emu.runExpr(b.getInstructions());
+                                if (Ast.constValue(cond) instanceof Boolean) p.opaquePredicates++;
+                            }
                         }
                     }
                 } catch (Exception ignored) {
@@ -122,21 +134,29 @@ public final class ObfuscationDetector {
         double nameShare = p.classes == 0 ? 0 : (double) p.obfuscatedClassNames / p.classes;
         boolean names = p.obfuscatedClassNames > 0 && nameShare >= 0.2;
 
-        if (cff == 0 && !enc && !tamper && !opaque && !names) {
+        // block-shuffle: почти каждый блок завершается GOTO. Базовая линия ~10%,
+        // CFF-билды ~23–28%, при перемешивании блоков — существенно выше.
+        double gotoShare = p.totalBlocks == 0 ? 0 : (double) p.gotoBlocks / p.totalBlocks;
+        boolean shuffle = p.totalBlocks >= 1000 && gotoShare >= 0.40;
+        String shuf = shuffle ? " + block-shuffle" : "";
+
+        if (cff == 0 && !enc && !tamper && !opaque && !names && !shuffle) {
             return "NONE — обфускации нет";
         }
         boolean ts = p.cffTableswitch > 0;
         boolean ga = p.cffGate > 0;
         if (ts && ga) {
-            return "MIXED_CFF — кастомный/смешанный CFF (tableswitch + switch-gate)";
+            return "MIXED_CFF — кастомный/смешанный CFF (tableswitch + switch-gate)" + shuf;
         }
         if (ts) {
-            return (opaque || enc || tamper)
-                    ? "CFF_TABLESWITCH — state-машина + доп. защиты"
-                    : "CFF_TABLESWITCH — state-машина";
+            return "CFF_TABLESWITCH — state-машина"
+                    + ((opaque || enc || tamper) ? " + доп. защиты" : "") + shuf;
         }
         if (ga) {
-            return "CFF_SWITCH_GATE — switch-gate";
+            return "CFF_SWITCH_GATE — switch-gate" + shuf;
+        }
+        if (shuffle) {
+            return "BLOCK_SHUFFLE — перемешанные блоки (GOTO-плотность)";
         }
         if (opaque) {
             return "OPAQUE_PREDICATES — непрозрачные предикаты без state-машины";
