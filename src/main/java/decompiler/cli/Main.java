@@ -2,6 +2,7 @@ package decompiler.cli;
 
 import decompiler.ast.JavaClassPrinter;
 import decompiler.ast.JavaExporter;
+import decompiler.ast.ClassHierarchy;
 import decompiler.ast.StringDecryptor;
 import decompiler.cfganalyzer.CfgBuilder;
 import decompiler.cfganalyzer.CfgDumper;
@@ -90,12 +91,20 @@ public final class Main {
             System.err.println("Предупреждение: не удалось инициализировать дешифратор строк: " + ex);
         }
 
+        // иерархия классов из входного jar — для точного вывода ссылочных типов
+        ClassHierarchy hierarchy = null;
+        try {
+            hierarchy = ClassHierarchy.fromJar(jar);
+        } catch (Exception ignored) {
+            hierarchy = null;
+        }
+
         try {
             if (exportDir != null) {
-                var res = JavaExporter.export(jar, Path.of(exportDir), decryptor);
+                var res = JavaExporter.export(jar, Path.of(exportDir), decryptor, hierarchy);
                 System.err.printf("Exported %d class(es) (errors=%d) to %s%n", res.classes, res.errors, res.outDir);
             } else if (astMode) {
-                int n = runAst(jar, decryptor);
+                int n = runAst(jar, decryptor, hierarchy);
                 System.err.printf("Java AST generated for %d method(s) from %s%n", n, jar);
             } else if (structureMode) {
                 int n = runStructure(jar);
@@ -220,13 +229,13 @@ public final class Main {
     }
 
     /** Генерация Java-кода: печать полного класса (поля + методы через пайплайн). */
-    private static int runAst(Path jar, StringDecryptor decryptor) throws Exception {
+    private static int runAst(Path jar, StringDecryptor decryptor, ClassHierarchy hierarchy) throws Exception {
         final int[] methods = {0};
         JarParser.parse(jar, (p, entry, node) -> {
             ClassNode cn = node;
             System.out.println("// ===== " + entry + " =====");
             try {
-                System.out.print(JavaClassPrinter.printClass(cn, decryptor));
+                System.out.print(JavaClassPrinter.printClass(cn, decryptor, hierarchy));
             } catch (Exception ex) {
                 System.out.println("  // class: " + ex);
             }
@@ -245,18 +254,21 @@ public final class Main {
         System.out.print(sb);
     }
 
-    /** Ищет .dat-ресурс со строками в корне jar и возвращает его байты (или null). */
+    /** Ищет .dat-ресурс со строками в jar и возвращает его байты (или null).
+     *  Сначала пробует .dat у которого magic 0x53565342; иначе первый попавшийся.
+     *  Метаданные META-INF пропускаем. */
     private static byte[] findDatResource(Path jar) throws Exception {
         try (var zf = new java.util.jar.JarFile(jar.toFile())) {
             var en = zf.entries();
             while (en.hasMoreElements()) {
                 var e = en.nextElement();
-                if (e.isDirectory()) continue;
-                String n = e.getName();
-                // ищем одиночный .dat в корне (не в подпапках метаданных)
-                if (n.endsWith(".dat") && !n.contains("/")
-                        && !n.startsWith("META-INF")) {
-                    return zf.getInputStream(e).readAllBytes();
+                if (e.isDirectory() || !e.getName().endsWith(".dat")
+                        || e.getName().startsWith("META-INF")) continue;
+                byte[] data = zf.getInputStream(e).readAllBytes();
+                if (data.length >= 4) {
+                    int magic = ((data[0] & 0xff) << 24) | ((data[1] & 0xff) << 16)
+                            | ((data[2] & 0xff) << 8) | (data[3] & 0xff);
+                    if (magic == 0x53565342) return data; // это таблица строк
                 }
             }
         }

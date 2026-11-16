@@ -37,7 +37,8 @@ public final class StructureToAst {
     private final java.util.Set<Integer> switchConsumed = new java.util.HashSet<>(); // Р±Р»РѕРєРё case/default, СѓР¶Рµ РїРѕРіР»РѕС‰С‘РЅРЅС‹Рµ switch
     private final java.util.List<org.objectweb.asm.tree.TryCatchBlockNode> tryCatch;
     private final java.util.Map<org.objectweb.asm.tree.LabelNode, Integer> labelToBlock; // РјРµС‚РєР° -> РёРЅРґРµРєСЃ Р±Р»РѕРєР°
-    private final StringDecryptor decryptor; // РјРѕР¶РµС‚ Р±С‹С‚СЊ null вЂ” СЃС‚СЂРѕРєРё РЅРµ СЂР°СЃС€РёС„СЂРѕРІС‹РІР°СЋС‚СЃСЏ
+    private final StringDecryptor decryptor;
+    private final ClassHierarchy hierarchy;
 
     /** Р’С‹С‡РёСЃР»СЏРµС‚ РјР°РїРїРёРЅРі LabelNode -> РёРЅРґРµРєСЃ Р±Р»РѕРєР°. РњРµС‚РєР° РјРѕР¶РµС‚ Р±С‹С‚СЊ РІ Р»СЋР±РѕР№
      *  РїРѕР·РёС†РёРё Р±Р»РѕРєР° (РЅРµ С‚РѕР»СЊРєРѕ РїРµСЂРІРѕР№), С‚.Рє. try-range С‡Р°СЃС‚Рѕ РЅР°С‡РёРЅР°РµС‚СЃСЏ РІРЅСѓС‚СЂРё. */
@@ -68,16 +69,22 @@ public final class StructureToAst {
 
     public StructureToAst(List<BasicBlock> blocks, MethodNode method, java.util.Set<Integer> cffDispatch,
                           StringDecryptor decryptor, String classOwner) {
+        this(blocks, method, cffDispatch, decryptor, classOwner, null);
+    }
+
+    public StructureToAst(List<BasicBlock> blocks, MethodNode method, java.util.Set<Integer> cffDispatch,
+                          StringDecryptor decryptor, String classOwner, ClassHierarchy hierarchy) {
         this.blocks = blocks;
         this.method = method;
         this.isStatic = (method.access & Opcodes.ACC_STATIC) != 0;
-        this.slotTypes = TypeInference.infer(method, isStatic, classOwner);
+        this.slotTypes = TypeInference.infer(method, isStatic, classOwner, hierarchy);
         int paramCount = argCount(method.desc);
         this.names = new Ast.VarNameResolver(paramCount, isStatic ? 0 : 1);
         this.cffDispatch = cffDispatch;
         this.tryCatch = method.tryCatchBlocks != null ? method.tryCatchBlocks : java.util.List.of();
         this.labelToBlock = buildLabelMap(blocks);
         this.decryptor = decryptor;
+        this.hierarchy = hierarchy;
     }
 
     /** Р“Р»Р°РІРЅР°СЏ С‚РѕС‡РєР° РІС…РѕРґР°. */

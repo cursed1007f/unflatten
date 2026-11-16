@@ -38,17 +38,22 @@ public final class JavaExporter {
      * @return статистику: сколько классов записано и сколько упало.
      */
     public static Result export(Path jar, Path outDir) throws IOException {
-        return export(jar, outDir, null);
+        return export(jar, outDir, null, null);
     }
 
     public static Result export(Path jar, Path outDir, StringDecryptor decryptor) throws IOException {
+        return export(jar, outDir, decryptor, null);
+    }
+
+    public static Result export(Path jar, Path outDir, StringDecryptor decryptor,
+                                ClassHierarchy hierarchy) throws IOException {
         Files.createDirectories(outDir);
         AtomicInteger ok = new AtomicInteger();
         AtomicInteger err = new AtomicInteger();
         AtomicInteger exceptionCount = new AtomicInteger();
         JarParser.parse(jar, (p, entry, cn) -> {
             try {
-                writeClass(outDir, cn, decryptor);
+                writeClass(outDir, cn, decryptor, hierarchy);
                 ok.incrementAndGet();
             } catch (Exception ex) {
                 exceptionCount.incrementAndGet();
@@ -58,7 +63,8 @@ public final class JavaExporter {
     }
 
     /** Пишет один класс по пути пакета. */
-    private static void writeClass(Path outDir, ClassNode cn, StringDecryptor decryptor) throws IOException {
+    private static void writeClass(Path outDir, ClassNode cn, StringDecryptor decryptor,
+                                   ClassHierarchy hierarchy) throws IOException {
         String internal = cn.name;          // foo/bar/Baz
         String pkg = "";
         String simple = internal;
@@ -75,7 +81,7 @@ public final class JavaExporter {
         Files.createDirectories(dir);
         Path file = dir.resolve(simple + ".java");
 
-        String body = JavaClassPrinter.printClass(cn, decryptor);
+        String body = JavaClassPrinter.printClass(cn, decryptor, hierarchy);
         // вставить package-объявление если есть
         String header = pkg.isEmpty() ? "" : "package " + pkg.replace('/', '.') + ";\n\n";
         Files.writeString(file, header + body);

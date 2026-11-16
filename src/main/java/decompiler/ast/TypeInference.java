@@ -33,6 +33,11 @@ public final class TypeInference {
      * @param isStatic флаг static (слот 0 = this у instance)
      */
     public static String[] infer(MethodNode mn, boolean isStatic, String classOwner) {
+        return infer(mn, isStatic, classOwner, null);
+    }
+
+    public static String[] infer(MethodNode mn, boolean isStatic, String classOwner,
+                                 ClassHierarchy hierarchy) {
         int max = mn.maxLocals;
         String[] out = new String[max];
         for (int i = 0; i < max; i++) out[i] = "Object";
@@ -51,10 +56,12 @@ public final class TypeInference {
         }
 
         // локальные: тип по store-точке из кадров.
-        // сначала пробуем SimpleVerifier (точные типы, но требует resolver и
-        // обычно падает на незнакомых классах), затем — BasicInterpreter
-        // (примитивы и базовые объекты без resolver).
-        Frame<BasicValue>[] frames = tryAnalyze(mn, new SimpleVerifier());
+        // SimpleVerifier плохо наследуется (его конструктор кидает
+        // IllegalStateException для любого подкласса — защита от наследования),
+        // поэтому используем BasicVerifier: он без рефлексии и даёт точный
+        // тип ссылочного значения через getType(). Если и он падает —
+        // фолбэк на BasicInterpreter (примитивы и базовые объекты).
+        Frame<BasicValue>[] frames = tryAnalyze(mn, new org.objectweb.asm.tree.analysis.BasicVerifier());
         if (frames == null) frames = tryAnalyze(mn, new org.objectweb.asm.tree.analysis.BasicInterpreter());
         if (frames != null) {
             AbstractInsnNode[] insns = mn.instructions.toArray();
