@@ -55,6 +55,8 @@ public final class Ast {
          * p0,p1,... по порядковому номеру; остальные — по типу: iVar/lVar/oVar...
          */
         public String name(int slot, String typeName) {
+            // слот 0 в instance-методе — это this
+            if (thisOffset == 1 && slot == 0) return "this";
             String base;
             if (slot >= thisOffset && slot < thisOffset + paramCount) {
                 base = "p" + (slot - thisOffset);

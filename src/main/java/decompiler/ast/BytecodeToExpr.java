@@ -34,6 +34,9 @@ public final class BytecodeToExpr {
     private final List<Ast.Stmt> stmts = new ArrayList<>();
     /** Блок уже завершён return/throw — остальные инструкции недостижимы. */
     private boolean terminated;
+    /** Выражения заведомо boolean-типа (для условий без сравнения с 0). */
+    private final java.util.Set<Ast.Expr> booleanExprs =
+            java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
     private final Ast.VarNameResolver names;
     /** Тип слота -> имя (заполняется извне анализатором типов). */
     private final String[] slotTypes;
@@ -116,6 +119,24 @@ public final class BytecodeToExpr {
         return names.name(slot, type);
     }
 
+    /** Слот объявлен как boolean? */
+    private boolean isBooleanSlot(int var) {
+        return slotTypes != null && var >= 0 && var < slotTypes.length
+                && "boolean".equals(slotTypes[var]);
+    }
+
+    /** Литерал 0/1 -> false/true, если цель boolean. */
+    private static Ast.Expr boolLit(Ast.Expr v, boolean isBool) {
+        if (!isBool || !(v instanceof Ast.Literal l)) return v;
+        Object val = l.value();
+        if (val instanceof Number num) {
+            int i = num.intValue();
+            if (i == 0) return new Ast.Literal(false);
+            if (i == 1) return new Ast.Literal(true);
+        }
+        return v;
+    }
+
     private void consume(AbstractInsnNode n, boolean stopBeforeReturn) {
         if (n.getOpcode() < 0) return; // label/line/frame
         if (terminated) return; // недостижимый код после return/throw
@@ -153,16 +174,16 @@ public final class BytecodeToExpr {
             // --- локальные ---
             case Opcodes.ILOAD, Opcodes.LLOAD, Opcodes.FLOAD, Opcodes.DLOAD, Opcodes.ALOAD -> {
                 int var = ((VarInsnNode) n).var;
-                stack.push(new Ast.Var(name(var)));
+                Ast.Var lv = new Ast.Var(name(var));
+                if (n.getOpcode() == Opcodes.ILOAD && isBooleanSlot(var)) booleanExprs.add(lv);
+                stack.push(lv);
             }
             case Opcodes.ISTORE, Opcodes.LSTORE, Opcodes.FSTORE, Opcodes.DSTORE, Opcodes.ASTORE -> {
                 int var = ((VarInsnNode) n).var;
                 Ast.Expr v = pop();
                 Ast.Var tgt = new Ast.Var(name(var));
-                stmts.add(new Ast.Assign(tgt, v));
-                // стек: локальная переменная после store не остаётся на стеке,
-                // но для корректных программ дальше её читают через load.
-                // ничего не пушим.
+                boolean isBool = n.getOpcode() == Opcodes.ISTORE && isBooleanSlot(var);
+                stmts.add(new Ast.Assign(tgt, boolLit(v, isBool)));
             }
             case Opcodes.IINC -> {
                 IincInsnNode i = (IincInsnNode) n;
@@ -194,13 +215,16 @@ public final class BytecodeToExpr {
             // --- поля ---
             case Opcodes.GETSTATIC -> {
                 FieldInsnNode f = (FieldInsnNode) n;
-                stack.push(new Ast.Field(null, f.name, true));
+                Ast.Field fld = new Ast.Field(null, f.name, true);
+                if ("Z".equals(f.desc)) booleanExprs.add(fld);
+                stack.push(fld);
             }
             case Opcodes.PUTFIELD -> {
                 Ast.Expr v = pop();
                 Ast.Expr t = pop();
                 FieldInsnNode f = (FieldInsnNode) n;
-                stmts.add(new Ast.Assign(new Ast.Var("this." + f.name), v)); // упрощённо, field-write
+                Ast.Expr val = boolLit(v, "Z".equals(f.desc)); // boolean-поле: 0/1 -> false/true
+                stmts.add(new Ast.Assign(new Ast.Var("this." + f.name), val)); // упрощённо, field-write
             }
             // --- вызовы ---
             case Opcodes.INVOKEVIRTUAL, Opcodes.INVOKESPECIAL, Opcodes.INVOKESTATIC, Opcodes.INVOKEINTERFACE ->
@@ -223,7 +247,7 @@ public final class BytecodeToExpr {
             case Opcodes.IFEQ, Opcodes.IFNE, Opcodes.IFLT, Opcodes.IFGE, Opcodes.IFGT, Opcodes.IFLE -> {
                 Ast.Expr v = pop();
                 // boolean-выражение не сравниваем с 0: hasNext() != 0 -> hasNext()
-                if (isBooleanExpr(v)
+                if ((isBooleanExpr(v) || booleanExprs.contains(v))
                         && (n.getOpcode() == Opcodes.IFEQ || n.getOpcode() == Opcodes.IFNE)) {
                     stack.push(n.getOpcode() == Opcodes.IFEQ ? new Ast.Unary("!", v) : v);
                 } else {
