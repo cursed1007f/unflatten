@@ -98,9 +98,11 @@ public final class JavaClassPrinter {
             return staticInitBlock(mn, decryptor, cn.name, hierarchy);
         }
 
-        sb.append(name == null ? "" : ret(desc(ret)) + " " + name);
-        if (name == null) {
-            // недостижимо
+        // у конструктора нет возвращаемого типа: печатаем просто Имя(params)
+        if (mn.name.equals("<init>")) {
+            sb.append(name);
+        } else {
+            sb.append(name == null ? "" : ret(desc(ret)) + " " + name);
         }
         // параметры
         List<String> params = params(args, mn);

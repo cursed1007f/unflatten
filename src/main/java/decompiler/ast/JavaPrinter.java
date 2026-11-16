@@ -102,7 +102,18 @@ public final class JavaPrinter {
         if (e instanceof Ast.Var v) return v.name();
         if (e instanceof Ast.This t) return "this";
         if (e instanceof Ast.NullLit) return "null";
-        if (e instanceof Ast.Binary b) return expr(b.left()) + " " + b.op() + " " + expr(b.right());
+        if (e instanceof Ast.Binary b) {
+            // arr[idx] — чтение из массива: без пробелов вокруг [ ]
+            if (b.op().equals("[]")) return expr(b.left()) + "[" + expr(b.right()) + "]";
+            // arr[idx] = val — запись в массив. Структура: Binary("[]=", arr, Binary("[]", idx, val))
+            if (b.op().equals("[]=")) {
+                if (b.right() instanceof Ast.Binary rb && rb.op().equals("[]")) {
+                    return expr(b.left()) + "[" + expr(rb.left()) + "] = " + expr(rb.right());
+                }
+                return expr(b.left()) + " = " + expr(b.right());
+            }
+            return expr(b.left()) + " " + b.op() + " " + expr(b.right());
+        }
         if (e instanceof Ast.Unary u) return u.op() + "(" + expr(u.operand()) + ")";
         if (e instanceof Ast.Call c) {
             StringBuilder sb = new StringBuilder();
@@ -118,7 +129,35 @@ public final class JavaPrinter {
             return (f.target() != null ? expr(f.target()) + "." : "") + f.name();
         }
         if (e instanceof Ast.NewObject no) {
-            StringBuilder sb = new StringBuilder("new " + Ast.friendlyType(no.desc()) + "(");
+            String desc = no.desc();
+            // Создание массива: дескриптор начинается с '[' или заканчивается "[]"
+            // (например "[I" / "[D" / "Lcom/foo;[]"). Выводим new T[size1][size2]...
+            if (desc != null && (desc.startsWith("[") || desc.endsWith("[]"))) {
+                StringBuilder sb = new StringBuilder("new ");
+                int dims = 0;
+                String elem;
+                if (desc.startsWith("[")) {
+                    int d = 0;
+                    while (d < desc.length() && desc.charAt(d) == '[') d++;
+                    dims = d;
+                    elem = Ast.friendlyType(desc.substring(d));
+                } else {
+                    // Lcom/foo;[] — один массив ссылочного типа
+                    dims = desc.lastIndexOf('[') == -1 ? 1 : desc.length() - desc.lastIndexOf('[');
+                    elem = Ast.friendlyType(desc.substring(0, desc.lastIndexOf('[')));
+                }
+                sb.append(elem);
+                int idx = 0;
+                for (int i = 0; i < dims; i++) {
+                    sb.append("[");
+                    if (idx < no.args().size()) {
+                        sb.append(expr(no.args().get(idx++)));
+                    }
+                    sb.append("]");
+                }
+                return sb.toString();
+            }
+            StringBuilder sb = new StringBuilder("new " + Ast.friendlyType(desc) + "(");
             for (int i = 0; i < no.args().size(); i++) {
                 if (i > 0) sb.append(", ");
                 sb.append(expr(no.args().get(i)));

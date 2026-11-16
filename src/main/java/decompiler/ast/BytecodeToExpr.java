@@ -230,7 +230,8 @@ public final class BytecodeToExpr {
             }
             case Opcodes.ARRAYLENGTH -> {
                 Ast.Expr arr = pop();
-                stack.push(new Ast.Call(arr, "length", List.of(), false));
+                // длина массива — это ПОЛЕ length, а не метод: arr.length
+                stack.push(new Ast.Field(arr, "length", false));
             }
             case Opcodes.NEWARRAY -> {
                 Ast.Expr size = pop();
@@ -337,6 +338,21 @@ public final class BytecodeToExpr {
         int argc = argsCount(m.desc);
         for (int i = 0; i < argc; i++) args.add(0, pop());
         Ast.Expr target = m.getOpcode() == Opcodes.INVOKESTATIC ? null : pop();
+
+        // --- конструктор: NEW Foo; DUP; args; INVOKESPECIAL Foo.<init>(args)V ---
+        // Склеиваем в один NewObject(desc, args), который остаётся на стеке вместо
+        // DUP-копии. Иначе печатается мусорное `new Foo().<init>(a)` + лишнее `Foo`.
+        if (m.name.equals("<init>") && target instanceof Ast.NewObject no) {
+            Ast.NewObject merged = new Ast.NewObject(no.desc(), args);
+            // стек сверху обычно держит DUP-копию того же NewObject — заменяем её
+            if (!stack.isEmpty() && stack.peek() instanceof Ast.NewObject p
+                    && p.desc() != null && p.desc().equals(no.desc())) {
+                stack.pop();
+            }
+            stack.push(merged);
+            return;
+        }
+
         Ast.Call call = new Ast.Call(target, m.name, args, m.getOpcode() == Opcodes.INVOKESTATIC);
         // void-вызов — оператор, а не значение
         if (m.desc.endsWith(")V")) {
