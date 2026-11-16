@@ -80,6 +80,16 @@ public final class PostDominatorAnalyzer {
             revPreds.get(n).add(e);
         }
 
+        // Изолированные блоки (без преемников в оригинале) не должны становиться
+        // искусственными пост-доминаторами всего: в перевёрнутом графе у них нет
+        // предков, и алгоритм дал бы dom = «все». Присоединяем их к супер-exit,
+        // т.е. считаем эквивалентными выходам.
+        for (int i = 0; i < n; i++) {
+            if (blocks.get(i).getSuccessors().isEmpty()) {
+                revPreds.get(n).add(i);
+            }
+        }
+
         // Купер-Харви-Кеннеди на перевёрнутом графе.
         List<Set<Integer>> dom = new ArrayList<>(n + 1);
         Set<Integer> all = new HashSet<>(allBlocks);
@@ -118,6 +128,14 @@ public final class PostDominatorAnalyzer {
         List<List<Integer>> ch = new ArrayList<>(n);
         for (int i = 0; i < n; i++) ch.add(new ArrayList<>());
         for (int b = 0; b < n; b++) {
+            // Блок без преемников в оригинале (включая изолированные после
+            // де-флаттенинга) — фактический выход; его ipdom = супер-exit (n).
+            // Без этого у такого узла revPreds пуст и он становился бы
+            // «универсальным пост-доминатором» и точкой слияния чужих ветвей.
+            if (blocks.get(b).getSuccessors().isEmpty()) {
+                ipdomArr[b] = n;
+                continue;
+            }
             Set<Integer> strict = new HashSet<>(dom.get(b));
             strict.remove(b);
             int ip = -1;

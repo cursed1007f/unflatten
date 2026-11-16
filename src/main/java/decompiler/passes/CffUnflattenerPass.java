@@ -55,19 +55,26 @@ public final class CffUnflattenerPass {
         public final List<int[]> edges;            // пары (from, to) индексы блоков
         public final BasicBlock dispatch;          // вырезанный диспетчер (или null)
         public final int stateSlot;                // слот stateVar (-1 если не найден)
+        public final int entryIndex;               // корень плоского графа (первый реальный блок, не init-state)
 
         Result(boolean unflattened, String reason, List<BasicBlock> blocks,
-               List<int[]> edges, BasicBlock dispatch, int stateSlot) {
+               List<int[]> edges, BasicBlock dispatch, int stateSlot, int entryIndex) {
             this.unflattened = unflattened;
             this.reason = reason;
             this.blocks = blocks;
             this.edges = edges;
             this.dispatch = dispatch;
             this.stateSlot = stateSlot;
+            this.entryIndex = entryIndex;
+        }
+
+        public static Result ok(List<BasicBlock> blocks, List<int[]> edges,
+                                BasicBlock dispatch, int stateSlot, int entryIndex) {
+            return new Result(true, "ok", blocks, edges, dispatch, stateSlot, entryIndex);
         }
 
         public static Result notUnflat(String reason) {
-            return new Result(false, reason, null, null, null, -1);
+            return new Result(false, reason, null, null, null, -1, -1);
         }
     }
 
@@ -141,12 +148,13 @@ public final class CffUnflattenerPass {
         List<BasicBlock> flatBlocks = new ArrayList<>(blocks);
         List<int[]> flatEdges = new ArrayList<>();
         // Начало: входной блок (не диспетчер) -> первый case. Какой он?
-        // state=0 на входе -> case с меткой min.
+        // state=0 на входе -> case с меткой min. РЕБРО НЕ КЛЕИМ: корнем плоского
+        // графа будет entryIndex (первый case), а входной блок BB0 в CFF пишет
+        // только stateVar=0 на входе и реального кода не несёт. Если оставить
+        // ребро BB0->case, рековер добирается до BB0 через pdom-join и эмитит
+        // мёртвое присваивание iVar4 = 0.
         BasicBlock entryCase = stateToCase.get(0);
         BasicBlock head = findEntryBefore(blocks, dispatch);
-        if (entryCase != null && head != null) {
-            flatEdges.add(new int[]{head.index(), entryCase.index()});
-        }
 
         // Рёба по setState: case -> следующий case (у условного case — 2 ребра)
         for (Map.Entry<BasicBlock, java.util.Set<Integer>> e : caseToStates.entrySet()) {
@@ -160,11 +168,19 @@ public final class CffUnflattenerPass {
 
         // Держим ВСЕ блоки в плоском списке (позиция = индекс должны совпадать,
         // иначе рековер структур ломается на блоках с индексом >= новой длины).
-        // Сам диспетчер в списке остаётся, но flat-рёбра его не упоминают —
-        // структурный рековер до него не дойдёт по потоку.
         List<BasicBlock> kept = new ArrayList<>(blocks);
 
-        Result res = new Result(true, "ok", kept, flatEdges, dispatch, stateSlot);
+        // Применяем плоские рёбра к реальному графу: рековер структур и
+        // анализаторы доминаторов читают getSuccessors(), поэтому чтобы они
+        // увидели развёрнутый граф, переписываем ребра напрямую.
+        BasicBlock.rebuildEdges(kept, flatEdges);
+
+        // Корень плоского графа — первый case по state=0, а не входной блок
+        // BB0 (BB0 в CFF пишет только stateVar=0 на входе). Если стартовать с
+        // BB0, рековер эмитит мёртвое присваивание iVar4 = 0.
+        int entryIndex = entryCase != null ? entryCase.index() : (head != null ? head.index() : 0);
+
+        Result res = new Result(true, "ok", kept, flatEdges, dispatch, stateSlot, entryIndex);
         return res;
     }
 

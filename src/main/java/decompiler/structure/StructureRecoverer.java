@@ -71,9 +71,18 @@ public final class StructureRecoverer {
      * @param entry индекс стартового блока
      */
     public StructureNode build(int entry) {
-        Set<Integer> all = new LinkedHashSet<>();
-        for (int i = 0; i < blocks.size(); i++) all.add(i);
-        return buildFrom(entry, all, new LinkedHashSet<>());
+        // Исключаем недостижимые изолированные блоки (без преемников И без
+        // предшественников, не вход) — например, оставшийся после де-флаттенинга
+        // CFF блок инициализации stateVar (ICONST; ISTORE; GOTO). Такой блок не
+        // должен ни появляться в дереве как join/продолжение, ни эмитить
+        // мёртвые присваивания iVarN = state.
+        Set<Integer> finalAll = new LinkedHashSet<>();
+        for (int i = 0; i < blocks.size(); i++) {
+            boolean isolated = blocks.get(i).getPredecessors().isEmpty()
+                    && blocks.get(i).getSuccessors().isEmpty();
+            if (i == entry || !isolated) finalAll.add(i);
+        }
+        return buildFrom(entry, finalAll, new LinkedHashSet<>());
     }
 
     /**
@@ -192,10 +201,18 @@ public final class StructureRecoverer {
         return new StructureAnalyzer.Loop(header, List.of(), List.of());
     }
 
-    /** Первый блок тела цикла (не header): вычислим первый элемент body. */
+    /** Точка входа в тело цикла: преемник header'а, лежащий в теле цикла
+     *  (и не являющийся back-edge to header). Это блок, куда header пускает
+     *  поток внутрь тела (предикат/первая операция), а не случайный элемент body. */
     private int bodyStartAfterHeader(StructureAnalyzer.Loop lp) {
-        // Возьмём первый latch-блок: тело начинается с блока, на который идёт
-        // ребро из header'а первым. Для простоты: первый элемент body.
+        BasicBlock hdr = blocks.get(lp.header);
+        for (BasicBlock s : hdr.getSuccessors()) {
+            // преемник header внутри тела цикла, который ведёт назад на header
+            if (lp.covered.contains(s.index()) && s.index() != lp.header) {
+                return s.index();
+            }
+        }
+        // fallback: первый элемент body
         List<Integer> body = lp.body;
         if (!body.isEmpty()) return body.get(0);
         return lp.header;

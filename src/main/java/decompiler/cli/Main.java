@@ -218,12 +218,15 @@ public final class Main {
                     // Если это CFF — сначала делаем граф плоским.
                     var deflat = CffUnflattenerPass.run(blocks);
                     if (deflat.unflattened) {
-                        System.out.println("  [CFF de-flattened] dispatch=BB" + deflat.dispatch.index());
+                        System.out.println("  [CFF de-flattened] dispatch=BB" + deflat.dispatch.index()
+                                + ", entry=BB" + deflat.entryIndex);
                         blocks = deflat.blocks;
                     }
                     try {
                         var rec = StructureRecoverer.forGraph(blocks);
-                        var root = rec.build(blocks.isEmpty() ? -1 : blocks.get(0).index());
+                        int centry = blocks.isEmpty() ? -1 : blocks.get(0).index();
+                        if (deflat.unflattened) centry = deflat.entryIndex;
+                        var root = rec.build(centry);
                         System.out.print(StructureDumper.render(root));
                     } catch (Exception ex) {
                         System.out.println("  (structure: " + ex + ")");

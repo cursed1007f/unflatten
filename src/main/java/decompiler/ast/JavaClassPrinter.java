@@ -124,12 +124,13 @@ public final class JavaClassPrinter {
         var blocks = CfgBuilder.build(mn);
         var deflat = CffUnflattenerPass.run(blocks);
         Set<Integer> cffDispatch = new java.util.HashSet<>();
+        int entry = blocks.isEmpty() ? -1 : blocks.get(0).index();
         if (deflat.unflattened) {
             blocks = deflat.blocks;
             cffDispatch.add(deflat.dispatch.index());
+            entry = deflat.entryIndex;
         }
         var rec = StructureRecoverer.forGraph(blocks);
-        int entry = blocks.isEmpty() ? -1 : blocks.get(0).index();
         var root = rec.build(entry);
         var ast = new StructureToAst(blocks, mn, cffDispatch, decryptor, classOwner, hierarchy).convert(root);
         // печатаем с отступами (4 пробела базово)

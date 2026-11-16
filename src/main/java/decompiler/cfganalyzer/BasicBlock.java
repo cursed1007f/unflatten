@@ -65,6 +65,25 @@ public final class BasicBlock {
         return successorByLabel;
     }
 
+    /**
+     * Перестраивает граф по списку рёбер {@code (from, to)} — индексы блоков.
+     * Используется после де-флаттенинга CFF, чтобы рековер структур и
+     * анализаторы доминаторов видели развёрнутый (плоский) граф, а не исходный
+     * зацикленный с диспетчером. Блоки, не затронутые рёбрами, изолируются.
+     */
+    public static void rebuildEdges(List<BasicBlock> blocks, List<int[]> edges) {
+        for (BasicBlock b : blocks) {
+            b.successors.clear();
+            b.predecessors.clear();
+        }
+        for (int[] e : edges) {
+            BasicBlock src = blocks.get(e[0]);
+            BasicBlock dst = blocks.get(e[1]);
+            src.successors.add(dst);
+            dst.predecessors.add(src);
+        }
+    }
+
     /** Первая (не-метка/не-line) инструкция блока; {@code null}, если блок пуст. */
     public AbstractInsnNode getFirstReal() {
         for (AbstractInsnNode n : instructions) {
