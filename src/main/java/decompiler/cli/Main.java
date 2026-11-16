@@ -263,6 +263,7 @@ public final class Main {
         final int[] methods = {0};
         // Чекер качества агрегирует маркеры по всем классам и печатает отчёт в stderr.
         final QualityChecker.Report q = new QualityChecker.Report();
+        final int[] siteBudget = {8}; // печатаем места >= this только для первых N классов
         JarParser.parse(jar, (p, entry, node) -> {
             ClassNode cn = node;
             String internal = entry.endsWith(".class")
@@ -272,7 +273,10 @@ public final class Main {
             try {
                 String java = JavaClassPrinter.printClass(cn, decryptor, hierarchy);
                 System.out.print(java);
-                q.merge(QualityChecker.scan(java));
+                QualityChecker.Report rep = QualityChecker.scan(java);
+                rep.className = display;
+                if (!rep.cmpThisSites.isEmpty() && siteBudget[0]-- > 0) rep.printCmpThisSites();
+                q.merge(rep);
             } catch (Exception ex) {
                 StackTraceElement at = ex.getStackTrace().length > 0 ? ex.getStackTrace()[0] : null;
                 System.out.println("  // class: " + ex + (at != null ? "  @ " + at : ""));

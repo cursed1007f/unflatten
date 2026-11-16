@@ -23,6 +23,18 @@ public final class QualityChecker {
         public int ctorInit = 0;                 // this.<init>(, oVar0.<init>(
         public int questionMark = 0;             // /* ? */
         public int lineCount = 0;
+        /** Имя класса (для диагностики мест). Заполняется вызывающим кодом перед scan. */
+        public String className = "";
+        /** Первые места с {@code >= this} (для точечной диагностики). */
+        public final java.util.List<CmpThisSite> cmpThisSites = new java.util.ArrayList<>();
+
+        /** Печатает места с {@code >= this} для этого класса (если есть). Пишет в stdout. */
+        public void printCmpThisSites() {
+            if (cmpThisSites.isEmpty()) return;
+            for (CmpThisSite s : cmpThisSites) {
+                System.out.println("// QSITE [" + className + "] >= this @ строка " + (s.line + 1) + ": " + s.text);
+            }
+        }
 
         public int score() {
             // веса: грубые типы важнее косметики
@@ -69,6 +81,13 @@ public final class QualityChecker {
 
     // ------------------------------------------------------------------ маркеры
 
+    /** Одно найденное место с {@code >= this} (для точечной диагностики). */
+    public static final class CmpThisSite {
+        public final int line;   // номер строки в Java-выводе (с нуля)
+        public final String text; // фрагмент строки с маркером
+        public CmpThisSite(int line, String text) { this.line = line; this.text = text; }
+    }
+
     // "iVar29 >= this", "this >= x" — но НЕ "this.size()", "this.length" (валидный
     // доступ к члену). Смотрим на "this" как голый операнд сравнения: после "this"
     // не должно идти '.' (member access) и до него не должно быть '.' (член справа).
@@ -113,6 +132,7 @@ public final class QualityChecker {
         if (java == null || java.isEmpty()) return r;
         r.lineCount = countLines(java);
         r.contextThisCompare = count(CMP_THIS, java);
+        if (r.contextThisCompare > 0) collectCmpThis(java, r);
         r.thisIndex = count(THIS_INDEX, java);
         r.dumbThrow = count(THROW_NUM, java) + count(THROW_VAR, java);
         r.castObject = count(CAST_OBJECT, java);
@@ -122,6 +142,22 @@ public final class QualityChecker {
         r.ctorInit = count(CTOR_INIT, java);
         r.questionMark = java.contains("/* ? */") ? countAll("/* ? */", java) : 0;
         return r;
+    }
+
+    /** Собирает первые места с {@code >= this} (строка + фрагмент) для диагностики. */
+    private static void collectCmpThis(String java, Report r) {
+        String[] lines = java.split("\n", -1);
+        var m = CMP_THIS.matcher(java);
+        int budget = 8;
+        while (m.find() && budget-- > 0) {
+            int lineNo = 0, count = 0;
+            while (count <= m.start() && lineNo < lines.length) {
+                count += lines[lineNo].length() + 1;
+                lineNo++;
+            }
+            String text = lines[Math.max(0, lineNo - 1)].trim();
+            r.cmpThisSites.add(new CmpThisSite(lineNo - 1, text.length() > 90 ? text.substring(0, 90) : text));
+        }
     }
 
     private static int count(Pattern p, String s) {
