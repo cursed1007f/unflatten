@@ -102,9 +102,9 @@ public final class QualityChecker {
     // throw(0); throw(7);
     private static final Pattern THROW_NUM =
             Pattern.compile("throw\\s*\\(\\s*-?\\d+\\s*\\)");
-    // throw(oVar12);
-    private static final Pattern THROW_VAR =
-            Pattern.compile("throw\\s*\\(\\s*(oVar|lVar|fVar|dVar|iVar)\\d+\\s*\\)");
+    // throw(iVar12) — примитив вместо Throwable (стек испорчен); oVar — валидная ссылка, не считаем
+    private static final Pattern THROW_PRIM_VAR =
+            Pattern.compile("throw\\s*\\(\\s*(iVar|lVar|fVar|dVar)\\d+\\s*\\)");
 
     // (Object)x-cast
     private static final Pattern CAST_OBJECT =
@@ -134,7 +134,7 @@ public final class QualityChecker {
         r.contextThisCompare = count(CMP_THIS, java);
         if (r.contextThisCompare > 0) collectCmpThis(java, r);
         r.thisIndex = count(THIS_INDEX, java);
-        r.dumbThrow = count(THROW_NUM, java) + count(THROW_VAR, java);
+        r.dumbThrow = count(THROW_NUM, java) + count(THROW_PRIM_VAR, java);
         r.castObject = count(CAST_OBJECT, java);
         r.newObject = count(NEW_OBJECT, java);
         r.deadIVarConst = count(DEAD_IVAR_CONST, java);

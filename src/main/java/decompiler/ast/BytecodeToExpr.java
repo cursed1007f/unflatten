@@ -399,6 +399,11 @@ public final class BytecodeToExpr {
                 // мёртвый ATHROW без объекта-исключения (после return) — не эмитим throw(0)
                 if (stack.isEmpty()) return;
                 Ast.Expr v = pop();
+                // ATHROW по JVM всегда кидает ссылку на Throwable. Если на стеке
+                // примитив (число/primitive-var) — стек испорчен (catch-слот
+                // переиспользован, де-флаттенинг), настоящий throw объект потерян.
+                // Такой throw бессмыслен — не эмитим, но блок завершаем.
+                if (isPrimitiveThrowArg(v)) { terminated = true; stack.clear(); return; }
                 stmts.add(new Ast.ExprStmt(new Ast.Call(null, "throw", List.of(v), false)));
                 terminated = true;
                 stack.clear();
@@ -552,6 +557,17 @@ public final class BytecodeToExpr {
     private Ast.Expr pop() {
         if (stack.isEmpty()) return new Ast.Literal(0);
         return stack.pop();
+    }
+
+    /** Истинно, если аргумент ATHROW — примитив (числовой/литерал), а не ссылка на Throwable. */
+    private static boolean isPrimitiveThrowArg(Ast.Expr v) {
+        if (v instanceof Ast.Literal l) return l.value() instanceof Number;
+        if (v instanceof Ast.Var var) {
+            String n = var.name();
+            // примитив-var: iVar/fVar/lVar/dVar (oVar — ссылка, корректный catch-реитрoat)
+            return n.startsWith("iVar") || n.startsWith("fVar") || n.startsWith("lVar") || n.startsWith("dVar");
+        }
+        return false;
     }
 
     /** Выражение заведомо булева типа (сравнение/логика/вызов с типом Z). */
