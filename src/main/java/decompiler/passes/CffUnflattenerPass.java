@@ -56,9 +56,10 @@ public final class CffUnflattenerPass {
         public final BasicBlock dispatch;          // вырезанный диспетчер (или null)
         public final int stateSlot;                // слот stateVar (-1 если не найден)
         public final int entryIndex;               // корень плоского графа (первый реальный блок, не init-state)
+        public final String kind;                  // вид CFF: "tableswitch" | "gate" | ""
 
         Result(boolean unflattened, String reason, List<BasicBlock> blocks,
-               List<int[]> edges, BasicBlock dispatch, int stateSlot, int entryIndex) {
+               List<int[]> edges, BasicBlock dispatch, int stateSlot, int entryIndex, String kind) {
             this.unflattened = unflattened;
             this.reason = reason;
             this.blocks = blocks;
@@ -66,15 +67,16 @@ public final class CffUnflattenerPass {
             this.dispatch = dispatch;
             this.stateSlot = stateSlot;
             this.entryIndex = entryIndex;
+            this.kind = kind == null ? "" : kind;
         }
 
         public static Result ok(List<BasicBlock> blocks, List<int[]> edges,
-                                BasicBlock dispatch, int stateSlot, int entryIndex) {
-            return new Result(true, "ok", blocks, edges, dispatch, stateSlot, entryIndex);
+                                BasicBlock dispatch, int stateSlot, int entryIndex, String kind) {
+            return new Result(true, "ok", blocks, edges, dispatch, stateSlot, entryIndex, kind);
         }
 
         public static Result notUnflat(String reason) {
-            return new Result(false, reason, null, null, null, -1, -1);
+            return new Result(false, reason, null, null, null, -1, -1, "");
         }
     }
 
@@ -189,7 +191,7 @@ public final class CffUnflattenerPass {
             }
             List<BasicBlock> keptG = new ArrayList<>(blocks);
             BasicBlock.rebuildEdges(keptG, gateEdges);
-            return new Result(true, "ok-gate", keptG, gateEdges, dispatch, stateSlot, gEntry.index());
+            return new Result(true, "ok-gate", keptG, gateEdges, dispatch, stateSlot, gEntry.index(), "gate");
         }
 
         // --- построить плоский граф ---
@@ -228,7 +230,7 @@ public final class CffUnflattenerPass {
         // BB0, рековер эмитит мёртвое присваивание iVar4 = 0.
         int entryIndex = entryCase != null ? entryCase.index() : (head != null ? head.index() : 0);
 
-        Result res = new Result(true, "ok", kept, flatEdges, dispatch, stateSlot, entryIndex);
+        Result res = new Result(true, "ok", kept, flatEdges, dispatch, stateSlot, entryIndex, "tableswitch");
         return res;
     }
 

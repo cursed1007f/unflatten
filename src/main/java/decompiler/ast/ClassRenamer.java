@@ -176,9 +176,22 @@ public final class ClassRenamer {
         return looksRandom(s);
     }
 
+    /** Публичный признак обфускации класса (для детектора): пакет-приманка или случайное имя. */
+    public static boolean looksObfuscated(String internal) {
+        for (String p : OBF_PACKAGES) if (internal.startsWith(p)) return true;
+        return looksRandom(simple(internal));
+    }
+
     /** Похоже ли имя на случайную обфускацию (эвристика). */
     private static boolean looksRandom(String s) {
         if (s == null || s.length() < 5) return false;
+        // «спам» из похожих символов I/l/1/O/0 (IllIlIIIIIIlII) — типичный обфускатор
+        int confusable = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == 'I' || c == 'l' || c == '1' || c == 'O' || c == '0') confusable++;
+        }
+        if (s.length() >= 6 && (double) confusable / s.length() >= 0.6) return true;
         int upper = 0, lower = 0, digits = 0, vowels = 0;
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);

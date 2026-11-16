@@ -59,6 +59,7 @@ public final class Main {
         boolean deflatMode = false;
         boolean structureMode = false;
         boolean astMode = false;
+        boolean detectMode = false;
         String exportDir = null;
         Path keyPath = null;
         for (int i = 1; i < args.length; i++) {
@@ -67,6 +68,7 @@ public final class Main {
             if (args[i].equals("--deflat")) deflatMode = true;
             if (args[i].equals("--structure")) structureMode = true;
             if (args[i].equals("--ast")) astMode = true;
+            if (args[i].equals("--detect")) detectMode = true;
             if (args[i].equals("--export") && i + 1 < args.length) {
                 exportDir = args[i + 1];
                 i++;
@@ -113,6 +115,15 @@ public final class Main {
         } catch (Exception ex) {
             System.err.println("Предупреждение: переименование классов не удалось: " + ex);
         }
+
+        // Детектор обфускации: профиль и вердикт перед декомпиляцией
+        try {
+            var prof = decompiler.ast.ObfuscationDetector.analyze(jar);
+            System.err.print(prof.summary());
+        } catch (Exception ex) {
+            System.err.println("Детектор обфускации: " + ex);
+        }
+        if (detectMode) return;
 
         try {
             if (exportDir != null) {
