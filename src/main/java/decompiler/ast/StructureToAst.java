@@ -123,7 +123,15 @@ public final class StructureToAst {
                 for (StructureNode c : node.children()) {
                     body.addAll(nodeToStmts(c));
                 }
-                out.add(new Ast.While(cond, body));
+                // Свёртка непрозрачного предиката в УСЛОВИИ цикла:
+                // while (1*1+1%2 != 0) -> while(true); while(false) -> тело мёртвое, не эмитим.
+                Object cv = Ast.constValue(cond);
+                if (cv instanceof Boolean b) {
+                    if (b) out.add(new Ast.While(new Ast.Literal(true), body));
+                    // else: всегда-ложь — цикл не выполняется
+                } else {
+                    out.add(new Ast.While(cond, body));
+                }
             }
             case IF_ELSE -> {
                 int condIdx = node.ifCondIndex();
