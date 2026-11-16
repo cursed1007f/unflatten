@@ -18,28 +18,23 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Пункт 1 универсальности: переименование обфусцированных классов в осмысленные.
+ * Пункты 1–2 универсальности: переименование обфусцированных классов в осмысленные
+ * имена и раскладка по тематическим пакетам (модулям).
  *
  * <p>Проходит jar один раз (только имена/супер/интерфейсы/сигнатуры — без
- * инструкций), выводит по эвристикам понятное имя для каждого обфусцированного
- * класса и хранит карту {@code internalName -> новое простое имя}. Карту
- * используют {@link Ast#friendlyType} и печать объявлений классов.
+ * инструкций), выводит для каждого обфусцированного класса понятное имя и
+ * тематический пакет, и хранит карту {@code internalName -> новый internal}
+ * (например {@code io/grpc/KAqblefBq -> ui/RainHandler}). Карту используют
+ * {@link Ast#friendlyType}, печать объявлений классов и заголовков.
  *
- * <p>Эвристики:
- * <ul>
- *   <li>пакеты-приманки обфускатора ({@code io/grpc}, {@code com/google/protobuf},
- *       {@code org/checkerframework}, {@code ovr/}, {@code zzp/} …) — точно
- *       переименовываем;</li>
- *   <li>тема имени — из интерфейсов/суперкласса (вес 3), имён методов (вес 2),
- *       полей (вес 1) по словарю «сильных» слов;</li>
- *   <li>суффикс по структуре: Runnable/Callable/Thread → {@code Task},
- *       onXxx-методы → {@code Handler}, только get/set → {@code Data},
- *       всё статическое → {@code Util}.</li>
- * </ul>
+ * <p>Тема пакета выбирается по агрегату токенов метода/полей/интерфейсов:
+ * {@code ui}, {@code net}, {@code config}, {@code math}, {@code ml},
+ * {@code world}, {@code audio}, {@code data}, {@code account}, {@code util};
+ * если сигналов нет — {@code mod}.
  */
 public final class ClassRenamer {
 
-    /** internalName -> новое простое имя. */
+    /** internalName -> новый full internal (пакет/Имя), напр. "ui/RainHandler". */
     private static final Map<String, String> RENAMED = new HashMap<>();
 
     /** Пакеты-приманки обфускатора: классы в них переименовываем всегда. */
@@ -47,6 +42,20 @@ public final class ClassRenamer {
             "io/grpc/", "com/google/protobuf/", "com/google/re2j/",
             "com/google/j2objc/", "com/google/errorprone/",
             "org/checkerframework/", "ovr/", "zzp/"
+    };
+
+    /** Тема -> ключевые слова (подстроки, нижний регистр). Порядок = приоритет. */
+    private static final String[][] THEMES = {
+            {"ml", "model,weight,gradient,train,vocab,mlp,neural,embedding,dense,layer,epoch,loss,predict,distribution,char"},
+            {"net", "packet,network,channel,socket,connection,protocol,send,receive,remote,client,server,request,response,http,url,host,ping,address"},
+            {"config", "config,setting,option,preference,module,feature,preset,toggle"},
+            {"audio", "sound,audio,music,volume,pitch,clip,song,track"},
+            {"account", "account,auth,session,token,login,password,credential,user"},
+            {"world", "entity,player,world,level,chunk,block,mob,spawn,target,position,coordinate,biome,camera,entity"},
+            {"math", "math,vector,matrix,quaternion,angle,clamp,lerp,round,random,interpolate,normalize,distance,speed,velocity"},
+            {"data", "cache,store,repository,dao,serialize,json,parse,file,load,save,read,write,stream,buffer,io"},
+            {"ui", "mouse,keyboard,key,render,screen,gui,panel,popup,slider,button,hover,widget,layout,text,color,font,icon,tooltip,click,scroll,drag,window,view,menu,hud,overlay,label,title,row,column,checkbox,animation,animate,tab,entry"},
+            {"util", "util,helper,string,format,sort,compare,collect,array,convert,value"},
     };
 
     /** «Слабые» токены, не дающие осмысленного имени. */
@@ -70,32 +79,36 @@ public final class ClassRenamer {
         RENAMED.clear();
     }
 
-    /** Построить карту переименований по всему jar. */
+    /** Построить карту переименований (имя + пакет) по всему jar. */
     public static void build(Path jar) throws Exception {
         Map<String, Signals> sigs = new LinkedHashMap<>();
         JarParser.parse(jar, (p, entry, cn) -> sigs.put(cn.name, Signals.of(cn)));
 
-        // Детерминированный порядок — сначала внешние классы, затем вложенные.
         List<String> names = new ArrayList<>(sigs.keySet());
         Collections.sort(names);
 
         Set<String> used = new HashSet<>();
-        // Внешние
+        // Внешние классы
         for (String internal : names) {
             if (internal.contains("$")) continue;
             if (!shouldRename(internal)) continue;
-            String newName = deriveName(internal, sigs.get(internal), used);
-            RENAMED.put(internal, newName);
+            Signals s = sigs.get(internal);
+            Map<String, Integer> score = tokenScore(s);
+            String pkg = themeOf(score);
+            String name = unique(pascal(best(score)) + suffix(s), used);
+            RENAMED.put(internal, pkg + "/" + name);
         }
-        // Вложенные: если внешний переименован — даём Внешний$ВнутреннийN
+        // Вложенные: если внешний переименован — тот же пакет, ИмяВнешнего$Внутренний
         for (String internal : names) {
             if (!internal.contains("$")) continue;
             int d = internal.indexOf('$');
             String outer = internal.substring(0, d);
-            if (!RENAMED.containsKey(outer)) continue;
-            String innerName = innerName(internal.substring(d + 1), sigs.get(internal), used,
-                    RENAMED.get(outer));
-            RENAMED.put(internal, innerName);
+            String outerNew = RENAMED.get(outer);
+            if (outerNew == null) continue;
+            String pkg = outerNew.substring(0, outerNew.lastIndexOf('/'));
+            String outerName = outerNew.substring(outerNew.lastIndexOf('/') + 1);
+            String inner = innerName(internal.substring(d + 1), sigs.get(internal), used, outerName);
+            RENAMED.put(internal, pkg + "/" + inner);
         }
     }
 
@@ -107,19 +120,14 @@ public final class ClassRenamer {
     /** Простое имя класса (переименованное, если есть). */
     public static String simpleNameOf(String internal) {
         String r = RENAMED.get(internal);
-        if (r != null) return r;
-        return simple(internal);
+        if (r == null) return simple(internal);
+        return lastSegment(r);
     }
 
-    /**
-     * Возвращает internal-имя с заменённым последним сегментом (если класс
-     * переименован). Для вложенных — заменяет весь хвост.
-     */
+    /** Новое full internal-имя (пакет/Имя), если класс переименован; иначе исходное. */
     public static String renameInternal(String internal) {
         String r = RENAMED.get(internal);
-        if (r == null) return internal;
-        int slash = internal.lastIndexOf('/');
-        return slash >= 0 ? internal.substring(0, slash + 1) + r : r;
+        return r != null ? r : internal;
     }
 
     // ------------------------------------------------------------------ сигналы
@@ -180,12 +188,11 @@ public final class ClassRenamer {
             if ("aeiouyAEIOUY".indexOf(c) >= 0) vowels++;
         }
         double vowelRatio = (double) vowels / s.length();
-        // случайное: много регистровых перескоков, мало гласных или цифро-буквенный микс
         return (upper >= 2 && lower >= 2 && vowelRatio < 0.28)
                 || (digits >= 1 && upper >= 1 && lower >= 1 && vowelRatio < 0.3);
     }
 
-    private static String deriveName(String internal, Signals s, Set<String> used) {
+    private static Map<String, Integer> tokenScore(Signals s) {
         Map<String, Integer> score = new LinkedHashMap<>();
         for (String i : s.interfaces) tokens(score, simple(i), 3);
         if (s.superName != null && !s.superName.equals("java/lang/Object")) {
@@ -193,13 +200,32 @@ public final class ClassRenamer {
         }
         for (String m : s.methods) tokens(score, m, 2);
         for (String f : s.fields) tokens(score, f, 1);
+        return score;
+    }
 
-        String base = best(score);
-        String suffix = suffix(s);
-        if (base == null) base = "Cls";
-        String name = pascal(base) + suffix;
-        name = unique(name, used);
-        return name;
+    /** Тема пакета по агрегату токенов. */
+    private static String themeOf(Map<String, Integer> score) {
+        Map<String, Integer> themes = new LinkedHashMap<>();
+        for (var e : score.entrySet()) {
+            String th = themeOfWord(e.getKey());
+            if (th != null) themes.merge(th, e.getValue(), Integer::sum);
+        }
+        String bestTheme = "mod";
+        int bestScore = 0;
+        for (var e : themes.entrySet()) {
+            if (e.getValue() > bestScore) { bestScore = e.getValue(); bestTheme = e.getKey(); }
+        }
+        return bestTheme;
+    }
+
+    private static String themeOfWord(String w) {
+        String lw = w.toLowerCase();
+        for (String[] t : THEMES) {
+            for (String kw : t[1].split(",")) {
+                if (!kw.isEmpty() && lw.contains(kw)) return t[0];
+            }
+        }
+        return null;
     }
 
     private static String suffix(Signals s) {
@@ -248,6 +274,7 @@ public final class ClassRenamer {
         for (String w : splitWords(src)) {
             String lw = w.toLowerCase();
             if (w.length() < 3 || STOP.contains(lw)) continue;
+            if (looksRandom(w)) continue; // обфусцированный токен — не даёт смысла
             score.merge(w, weight, Integer::sum);
         }
     }
@@ -288,7 +315,6 @@ public final class ClassRenamer {
     }
 
     private static String innerName(String innerRaw, Signals s, Set<String> used, String outerNew) {
-        // простой случай: Foo$1 / Foo$2 — анонимные; иначе пробуем вывести слово
         String candidate = null;
         if (!innerRaw.matches("\\d+") && s != null) {
             Map<String, Integer> score = new LinkedHashMap<>();
@@ -309,5 +335,10 @@ public final class ClassRenamer {
         String s = slash >= 0 ? internal.substring(slash + 1) : internal;
         int d = s.lastIndexOf('$');
         return d >= 0 ? s.substring(d + 1) : s;
+    }
+
+    private static String lastSegment(String path) {
+        int slash = path.lastIndexOf('/');
+        return slash >= 0 ? path.substring(slash + 1) : path;
     }
 }
