@@ -25,12 +25,14 @@
 7. StructureToAst + BytecodeToExpr — AST.
 8. JavaPrinter / JavaClassPrinter — вывод Java.
 
-## CFF-формат обфускатора (ликвидирован)
+## CFF (Control Flow Flattening): какие виды пережёвываем
 
-Метод превращается в state-машину: `ILOAD stateVar; TABLESWITCH(0..B-1, default=dispatch)`.
-Вход пишет `ICONST_0; ISTORE stateVar`. Каждый case-блок либо заканчивается return'ом
-(выходной), либо `setState` (`CONST state; ISTORE stateVar; GOTO dispatch`). Траншишн-блоки
-содержат только setState. Строки шифруются AES-256-GCM (`dec.a(String,int)`).
+**Всё про CFF — в `CFF.md`** (единственный источник правды). Кратко: классическая
+state-машина (`TABLESWITCH` default→self), switch-gate (`default`→GOTO-гейт→self),
+непрозрачные предикаты (свёртка констант), block-shuffle (плотность `GOTO`) и
+смешанные варианты. Тип определяет детектор `ObfuscationDetector`
+(вердикты `CFF_TABLESWITCH` / `CFF_SWITCH_GATE` / `OPAQUE_PREDICATES` /
+`BLOCK_SHUFFLE` / `MIXED_CFF`).
 
 ## Полное восстановление CFF — как это работает
 
