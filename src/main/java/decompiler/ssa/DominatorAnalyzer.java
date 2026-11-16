@@ -41,14 +41,22 @@ public final class DominatorAnalyzer {
         this.children = children;
     }
 
-    /** Строит доминаторный анализ на CFG метода. */
+    /** Строит доминаторный анализ на CFG метода (вход — блок 0). */
     public static DominatorAnalyzer analyze(List<BasicBlock> blocks) {
+        return analyze(blocks, 0);
+    }
+
+    /**
+     * Строит доминаторный анализ с явным входным блоком. Важно после CFF-де-флаттенинга:
+     * реальный вход может быть не блоком 0 (блок 0 — мёртвая инициализация state).
+     */
+    public static DominatorAnalyzer analyze(List<BasicBlock> blocks, int entryIdx) {
         if (blocks.isEmpty()) {
             throw new IllegalArgumentException("CFG пуст");
         }
         int n = blocks.size();
-        BasicBlock entry = blocks.get(0);
-        int entryIdx = 0;
+        if (entryIdx < 0 || entryIdx >= n) entryIdx = 0;
+        BasicBlock entry = blocks.get(entryIdx);
 
         // preds[i] и succs[i] по индексам блоков
         List<List<Integer>> preds = new ArrayList<>(n);

@@ -89,6 +89,7 @@ public final class CffUnflattenerPass {
         // --- найти диспетчер: блок с TABLESWITCH, чей default на самого себя ---
         BasicBlock dispatch = null;
         int stateSlot = -1;
+        boolean gateMode = false;
         for (BasicBlock bb : blocks) {
             AbstractInsnNode term = bb.getTerminator();
             if (!(term instanceof TableSwitchInsnNode ts)) continue;
@@ -98,6 +99,14 @@ public final class CffUnflattenerPass {
             if (dflt == bb) {
                 dispatch = bb;
                 stateSlot = stateVar(bb, ts);
+                gateMode = false;
+                break;
+            }
+            // switch-gate: default ведёт на GOTO-гейт, который возвращается в диспетчер
+            if (dflt != null && resolvesToViaGotos(dflt, bb)) {
+                dispatch = bb;
+                stateSlot = stateVar(bb, ts);
+                gateMode = true;
                 break;
             }
         }
@@ -142,6 +151,45 @@ public final class CffUnflattenerPass {
         }
         // дефолт-метка тоже может быть case'ом
         if (term instanceof TableSwitchInsnNode ts && ts.dflt == dispatch.getTerminator() /* not; см. ниже */) {
+        }
+
+        // --- switch-gate: одноразовый диспетчер (default -> GOTO-гейт -> диспетчер) ---
+        // Срезаем диспетчер и гейт-блоки, СОХРАНЯЯ исходные рёбра остальных блоков:
+        // здесь нет state-машины с возвратом в диспетчер, реальный код после входа
+        // идёт по обычным рёбрам. Если же есть setState-переходы — это не наш случай,
+        // отступаем (чтобы не разрушить реальный граф).
+        if (gateMode) {
+            if (!caseToStates.isEmpty()) {
+                return Result.notUnflat("switch-gate: есть setState-переходы — не поддерживается");
+            }
+            java.util.Set<Integer> remove = new java.util.HashSet<>();
+            remove.add(dispatch.index());
+            for (BasicBlock s : dispatch.getSuccessors()) {
+                if (s != dispatch && resolvesToViaGotos(s, dispatch)
+                        && readSetState(s, dispatch, stateSlot) == null) {
+                    remove.add(s.index());
+                }
+            }
+            BasicBlock gEntry = stateToCase.get(0);
+            if (gEntry == null || remove.contains(gEntry.index())) {
+                gEntry = null;
+                for (BasicBlock s : dispatch.getSuccessors()) {
+                    if (s != dispatch && !remove.contains(s.index())) { gEntry = s; break; }
+                }
+            }
+            if (gEntry == null) return Result.notUnflat("switch-gate: нет входного case");
+
+            List<int[]> gateEdges = new ArrayList<>();
+            for (BasicBlock b : blocks) {
+                if (remove.contains(b.index())) continue;
+                for (BasicBlock s : b.getSuccessors()) {
+                    if (remove.contains(s.index()) || s.index() == b.index()) continue;
+                    gateEdges.add(new int[]{b.index(), s.index()});
+                }
+            }
+            List<BasicBlock> keptG = new ArrayList<>(blocks);
+            BasicBlock.rebuildEdges(keptG, gateEdges);
+            return new Result(true, "ok-gate", keptG, gateEdges, dispatch, stateSlot, gEntry.index());
         }
 
         // --- построить плоский граф ---
@@ -250,6 +298,24 @@ public final class CffUnflattenerPass {
             i--;
         }
         return loaded;
+    }
+
+    /**
+     * Ведёт ли поток от {@code from} по цепочке безусловных GOTO (гейт-блоков)
+     * обратно в {@code target}. Так распознаётся switch-gate: default смотрит на
+     * гейт, а тот возвращается в диспетчер.
+     */
+    private static boolean resolvesToViaGotos(BasicBlock from, BasicBlock target) {
+        BasicBlock cur = from;
+        for (int i = 0; i < 64 && cur != null; i++) {
+            if (cur == target) return true;
+            AbstractInsnNode t = cur.getTerminator();
+            if (!(t instanceof JumpInsnNode j) || j.getOpcode() != Opcodes.GOTO) return false;
+            BasicBlock next = cur.getSuccessors().isEmpty() ? null : cur.getSuccessors().get(0);
+            if (next == null || next == cur) return next == target;
+            cur = next;
+        }
+        return false;
     }
 
     /** Блок, предшествующий диспетчеру (тот, откуда входим в диспетчер; не case). */

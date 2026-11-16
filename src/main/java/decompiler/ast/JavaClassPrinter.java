@@ -132,7 +132,7 @@ public final class JavaClassPrinter {
             cffDispatch.add(deflat.dispatch.index());
             entry = deflat.entryIndex;
         }
-        var rec = StructureRecoverer.forGraph(blocks);
+        var rec = StructureRecoverer.forGraph(blocks, entry);
         var root = rec.build(entry);
         var ast = new StructureToAst(blocks, mn, cffDispatch, decryptor, classOwner, hierarchy).convert(root);
         // печатаем с отступами (4 пробела базово)

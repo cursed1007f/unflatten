@@ -66,6 +66,15 @@ public final class StructureRecoverer {
     }
 
     /**
+     * Как {@link #forGraph(List)}, но с явным входным блоком. Нужно после
+     * CFF-де-флаттенинга, где реальный вход — не блок 0 (блок 0 часто мёртвая
+     * инициализация stateVar), иначе доминаторы вырождаются и циклы не находятся.
+     */
+    public static StructureRecoverer forGraph(List<BasicBlock> blocks, int entry) {
+        return new StructureRecoverer(blocks, DominatorAnalyzer.analyze(blocks, entry));
+    }
+
+    /**
      * Строит полное дерево структуры для входного блока.
      *
      * @param entry индекс стартового блока

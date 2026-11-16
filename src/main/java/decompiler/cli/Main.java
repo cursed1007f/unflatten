@@ -230,9 +230,9 @@ public final class Main {
                         blocks = deflat.blocks;
                     }
                     try {
-                        var rec = StructureRecoverer.forGraph(blocks);
                         int centry = blocks.isEmpty() ? -1 : blocks.get(0).index();
                         if (deflat.unflattened) centry = deflat.entryIndex;
+                        var rec = StructureRecoverer.forGraph(blocks, centry);
                         var root = rec.build(centry);
                         System.out.print(StructureDumper.render(root));
                     } catch (Exception ex) {
