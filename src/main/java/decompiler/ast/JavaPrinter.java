@@ -52,6 +52,18 @@ public final class JavaPrinter {
             for (Ast.Stmt b : w.body()) stmt(b);
             indent--;
             pad(); sb.append("}\n");
+        } else if (s instanceof Ast.TryCatch tc) {
+            pad(); sb.append("try {\n");
+            indent++;
+            for (Ast.Stmt b : tc.tryBody()) stmt(b);
+            indent--;
+            pad(); sb.append("} catch (");
+            sb.append(Ast.friendlyType("L" + tc.catchType() + ";")).append(' ')
+                    .append(tc.catchVar() != null ? tc.catchVar().name() : "e").append(") {\n");
+            indent++;
+            for (Ast.Stmt b : tc.catchBody()) stmt(b);
+            indent--;
+            pad(); sb.append("}\n");
         } else if (s instanceof Ast.Switch sw) {
             pad(); sb.append("switch (").append(expr(sw.key())).append(") {\n");
             indent++;

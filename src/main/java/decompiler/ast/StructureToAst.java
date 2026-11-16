@@ -35,6 +35,22 @@ public final class StructureToAst {
     private final boolean isStatic;
     private final java.util.Set<Integer> cffDispatch; // блоки-диспетчеры CFF (не switch)
     private final java.util.Set<Integer> switchConsumed = new java.util.HashSet<>(); // блоки case/default, уже поглощённые switch
+    private final java.util.List<org.objectweb.asm.tree.TryCatchBlockNode> tryCatch;
+    private final java.util.Map<org.objectweb.asm.tree.LabelNode, Integer> labelToBlock; // метка -> индекс блока
+
+    /** Вычисляет маппинг LabelNode -> индекс блока. Метка может быть в любой
+     *  позиции блока (не только первой), т.к. try-range часто начинается внутри. */
+    private static java.util.Map<org.objectweb.asm.tree.LabelNode, Integer> buildLabelMap(List<BasicBlock> bl) {
+        java.util.Map<org.objectweb.asm.tree.LabelNode, Integer> m = new java.util.HashMap<>();
+        for (int i = 0; i < bl.size(); i++) {
+            for (var insn : bl.get(i).getInstructions()) {
+                if (insn instanceof org.objectweb.asm.tree.LabelNode ln && !m.containsKey(ln)) {
+                    m.put(ln, i);
+                }
+            }
+        }
+        return m;
+    }
 
     public StructureToAst(List<BasicBlock> blocks, MethodNode method) {
         this(blocks, method, java.util.Set.of());
@@ -48,6 +64,8 @@ public final class StructureToAst {
         int paramCount = argCount(method.desc);
         this.names = new Ast.VarNameResolver(paramCount, isStatic ? 0 : 1);
         this.cffDispatch = cffDispatch;
+        this.tryCatch = method.tryCatchBlocks != null ? method.tryCatchBlocks : java.util.List.of();
+        this.labelToBlock = buildLabelMap(blocks);
     }
 
     /** Главная точка входа. */
@@ -66,6 +84,11 @@ public final class StructureToAst {
                 // если блок — switch, строим switch; его case-блоки отмечены в switchConsumed
                 int idx = node.blockIndex();
                 if (switchConsumed.contains(idx)) break; // уже обработан как case switch'а
+                Ast.Stmt tc = tryBuildTryCatch(idx);
+                if (tc != null) {
+                    out.add(tc);
+                    break;
+                }
                 Ast.Stmt sw = tryBuildSwitch(idx);
                 if (sw != null) {
                     out.add(sw);
@@ -98,6 +121,35 @@ public final class StructureToAst {
         List<Ast.Stmt> out = new ArrayList<>();
         convertNode(node, out);
         return out;
+    }
+
+    /** Если блок — начало try-range, строит Ast.TryCatch с первым catch'ем. */
+    private Ast.Stmt tryBuildTryCatch(int blockIndex) {
+        // найти tryCatchBlock, чей start-блок == этот блок
+        org.objectweb.asm.tree.TryCatchBlockNode match = null;
+        for (var tcb : tryCatch) {
+            Integer startBlock = labelToBlock.get(tcb.start);
+            if (startBlock != null && startBlock == blockIndex) {
+                match = tcb;
+                break;
+            }
+        }
+        if (match == null) return null;
+
+        // catch-блок (handler)
+        Integer handlerBlock = labelToBlock.get(match.handler);
+        if (handlerBlock == null) return null;
+
+        // try-body: тело нашего блока + тело handler'а как catch
+        // (упрощённо: try-body — текущий блок, catch — блок handler'а)
+        List<Ast.Stmt> tryBody = blockToStmt(blockIndex);
+        List<Ast.Stmt> catchBody = handlerBlock < blocks.size() ? blockToStmt(handlerBlock) : new ArrayList<>();
+        // пометить handler-блок потреблённым, чтобы не печатался повторно
+        switchConsumed.add(handlerBlock);
+
+        String type = match.type; // может быть null (finally) — на этом этапе просто дефолт
+        Ast.Var cv = new Ast.Var("e");
+        return new Ast.TryCatch(tryBody, type, cv, catchBody);
     }
 
     /** Если блок оканчивается switch — строит Ast.Switch; иначе null. */

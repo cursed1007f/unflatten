@@ -166,6 +166,11 @@ public final class Ast {
     public record Case(Integer value, List<Stmt> body) implements Stmt {
     }
 
+    /** try { body } catch (Type e) { ... } ... — один catch на запись. */
+    public record TryCatch(List<Stmt> tryBody, String catchType, Ast.Var catchVar,
+                           List<Stmt> catchBody) implements Stmt {
+    }
+
     /** Блок операторов. */
     public record Block(List<Stmt> body) implements Stmt {
         public Block() {
