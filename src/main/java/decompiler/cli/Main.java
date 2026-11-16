@@ -1,0 +1,216 @@
+package decompiler.cli;
+
+import decompiler.ast.JavaClassPrinter;
+import decompiler.cfganalyzer.CfgBuilder;
+import decompiler.cfganalyzer.CfgDumper;
+import decompiler.dumper.ClassStructureDumper;
+import decompiler.passes.CffUnflattenerPass;
+import decompiler.parser.JarParser;
+import decompiler.ssa.SsaDumper;
+import decompiler.structure.StructureDumper;
+import decompiler.structure.StructureRecoverer;
+
+import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.MethodNode;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+/**
+ * Точка входа декомпилятора (Этапы 1-5).
+ *
+ * Принимает путь к JAR-файлу. По умолчанию печатает базовую структуру классов
+ * (Этап 2); флаг {@code --cfg} — CFG (Этап 3); {@code --ssa} — SSA (Этап 4);
+ * {@code --deflat} — CFF-де-флаттенинг (Этап 5, запуск 1).
+ *
+ * Использование:
+ *   java -jar java-decompiler.jar <путь-к-jar> [--cfg|--ssa|--deflat]
+ */
+public final class Main {
+
+    private Main() {
+    }
+
+    public static void main(String[] args) {
+        if (args.length < 1 || args[0].isBlank()) {
+            System.err.println("Usage: java -jar java-decompiler.jar <path-to-jar> [--cfg|--ssa|--deflat|--structure]");
+            System.err.println("Пример: java -jar java-decompiler.jar app.jar");
+            System.err.println("        java -jar java-decompiler.jar app.jar --cfg");
+            System.err.println("        java -jar java-decompiler.jar app.jar --ssa");
+            System.err.println("        java -jar java-decompiler.jar app.jar --deflat");
+            System.err.println("        java -jar java-decompiler.jar app.jar --structure");
+            System.exit(2);
+        }
+
+        Path jar = Path.of(args[0]).toAbsolutePath().normalize();
+        if (!Files.isRegularFile(jar)) {
+            System.err.println("Файл не найден или это не обычный файл: " + jar);
+            System.exit(2);
+        }
+
+        boolean cfgMode = false;
+        boolean ssaMode = false;
+        boolean deflatMode = false;
+        boolean structureMode = false;
+        boolean astMode = false;
+        for (int i = 1; i < args.length; i++) {
+            if (args[i].equals("--cfg")) cfgMode = true;
+            if (args[i].equals("--ssa")) ssaMode = true;
+            if (args[i].equals("--deflat")) deflatMode = true;
+            if (args[i].equals("--structure")) structureMode = true;
+            if (args[i].equals("--ast")) astMode = true;
+        }
+
+        try {
+            if (astMode) {
+                int n = runAst(jar);
+                System.err.printf("Java AST generated for %d method(s) from %s%n", n, jar);
+            } else if (structureMode) {
+                int n = runStructure(jar);
+                System.err.printf("Structures recovered for %d method(s) from %s%n", n, jar);
+            } else if (deflatMode) {
+                int n = runDeflat(jar);
+                System.err.printf("CFF de-flattened %d method(s) from %s%n", n, jar);
+            } else if (ssaMode) {
+                int n = runSsa(jar);
+                System.err.printf("SSA built for %d method(s) from %s%n", n, jar);
+            } else if (cfgMode) {
+                int n = runCfg(jar);
+                System.err.printf("CFG built for %d method(s) from %s%n", n, jar);
+            } else {
+                ClassStructureDumper dumper = new ClassStructureDumper();
+                int n = JarParser.parse(jar, dumper::dump);
+                System.err.printf("Parsed %d class(es) from %s%n", n, jar);
+                dumper.printSummary();
+            }
+        } catch (Exception e) {
+            System.err.println("Не удалось разобрать JAR: " + jar);
+            e.printStackTrace(System.err);
+            System.exit(1);
+        }
+    }
+
+    /** Печатает CFG всех методов всех классов JAR. */
+    private static int runCfg(Path jar) throws Exception {
+        final int[] methods = {0};
+        JarParser.parse(jar, (p, entry, node) -> {
+            ClassNode cn = node;
+            if (cn.methods != null) {
+                for (MethodNode mn : cn.methods) {
+                    if (mn.instructions == null || mn.instructions.size() == 0) continue;
+                    System.out.println("== " + entry + " :: " + mn.name + mn.desc);
+                    System.out.print(CfgDumper.dump(mn, true));
+                    System.out.println();
+                    methods[0]++;
+                }
+            }
+        });
+        return methods[0];
+    }
+
+    /** Печатает SSA-форму всех методов всех классов JAR. */
+    private static int runSsa(Path jar) throws Exception {
+        final int[] methods = {0};
+        JarParser.parse(jar, (p, entry, node) -> {
+            ClassNode cn = node;
+            if (cn.methods != null) {
+                for (MethodNode mn : cn.methods) {
+                    if (mn.instructions == null || mn.instructions.size() == 0) continue;
+                    System.out.println("== " + entry + " :: " + mn.name + mn.desc);
+                    try {
+                        System.out.print(SsaDumper.dump(mn));
+                    } catch (Exception ex) {
+                        System.out.println("  (SSA не построился: " + ex + ")");
+                    }
+                    System.out.println();
+                    methods[0]++;
+                }
+            }
+        });
+        return methods[0];
+    }
+
+    /** Прогоняет CFFUnflattenerPass по всем методам и печатает результат. */
+    private static int runDeflat(Path jar) throws Exception {
+        final int[] methods = {0};
+        JarParser.parse(jar, (p, entry, node) -> {
+            ClassNode cn = node;
+            if (cn.methods != null) {
+                for (MethodNode mn : cn.methods) {
+                    if (mn.instructions == null || mn.instructions.size() == 0) continue;
+                    System.out.println("== " + entry + " :: " + mn.name + mn.desc);
+                    var blocks = CfgBuilder.build(mn);
+                    var res = CffUnflattenerPass.run(blocks);
+                    if (!res.unflattened) {
+                        System.out.println("  [not CFF] " + res.reason);
+                    } else {
+                        System.out.println("  [CFF found] stateSlot=" + res.stateSlot
+                                + ", dispatch=BB" + res.dispatch.index()
+                                + ", cases=" + (res.blocks.size() - 1) + ", edges=" + res.edges.size());
+                        dumpEdges(res);
+                    }
+                    methods[0]++;
+                }
+            }
+        });
+        return methods[0];
+    }
+
+    /** Восстановление структур: де-флаттенинг (если CFF) + дерево циклов/if-else. */
+    private static int runStructure(Path jar) throws Exception {
+        final int[] methods = {0};
+        JarParser.parse(jar, (p, entry, node) -> {
+            ClassNode cn = node;
+            if (cn.methods != null) {
+                for (MethodNode mn : cn.methods) {
+                    if (mn.instructions == null || mn.instructions.size() == 0) continue;
+                    System.out.println("== " + entry + " :: " + mn.name + mn.desc);
+                    var blocks = CfgBuilder.build(mn);
+                    // Если это CFF — сначала делаем граф плоским.
+                    var deflat = CffUnflattenerPass.run(blocks);
+                    if (deflat.unflattened) {
+                        System.out.println("  [CFF de-flattened] dispatch=BB" + deflat.dispatch.index());
+                        blocks = deflat.blocks;
+                    }
+                    try {
+                        var rec = StructureRecoverer.forGraph(blocks);
+                        var root = rec.build(blocks.isEmpty() ? -1 : blocks.get(0).index());
+                        System.out.print(StructureDumper.render(root));
+                    } catch (Exception ex) {
+                        System.out.println("  (structure: " + ex + ")");
+                    }
+                    System.out.println();
+                    methods[0]++;
+                }
+            }
+        });
+        return methods[0];
+    }
+
+    /** Генерация Java-кода: печать полного класса (поля + методы через пайплайн). */
+    private static int runAst(Path jar) throws Exception {
+        final int[] methods = {0};
+        JarParser.parse(jar, (p, entry, node) -> {
+            ClassNode cn = node;
+            System.out.println("// ===== " + entry + " =====");
+            try {
+                System.out.print(JavaClassPrinter.printClass(cn));
+            } catch (Exception ex) {
+                System.out.println("  // class: " + ex);
+            }
+            System.out.println();
+            methods[0]++;
+        });
+        return methods[0];
+    }
+
+    private static void dumpEdges(CffUnflattenerPass.Result res) {
+        // печатаем плоский граф: рёбра в порядке (from -> to)
+        StringBuilder sb = new StringBuilder("  flat edges:\n");
+        for (int[] e : res.edges) {
+            sb.append("    BB").append(e[0]).append(" -> BB").append(e[1]).append('\n');
+        }
+        System.out.print(sb);
+    }
+}
