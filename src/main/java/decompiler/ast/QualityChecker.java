@@ -69,9 +69,12 @@ public final class QualityChecker {
 
     // ------------------------------------------------------------------ маркеры
 
-    // "iVar29 >= this", "this >= x", "oVar4.length() >= this"
+    // "iVar29 >= this", "this >= x" — но НЕ "this.size()", "this.length" (валидный
+    // доступ к члену). Смотрим на "this" как голый операнд сравнения: после "this"
+    // не должно идти '.' (member access) и до него не должно быть '.' (член справа).
     private static final Pattern CMP_THIS =
-            Pattern.compile("\\bthis\\s*([<>]=?|==|!=)\\s*\\S|\\S\\s*([<>]=?|==|!=)\\s*this\\b");
+            Pattern.compile("(?:^|[^\\w.])this\\s*([<>]=?|==|!=)\\s*(?!this\\.)[^\n.]?|"
+                          + "[^\\w.]\\S*\\s*([<>]=?|==|!=)\\s*this(?!\\.)");
 
     // arr[this], new double[this], foo[this]
     private static final Pattern THIS_INDEX =

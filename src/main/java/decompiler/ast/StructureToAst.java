@@ -39,6 +39,7 @@ public final class StructureToAst {
     private final java.util.Map<org.objectweb.asm.tree.LabelNode, Integer> labelToBlock; // РјРµС‚РєР° -> РёРЅРґРµРєСЃ Р±Р»РѕРєР°
     private final StringDecryptor decryptor;
     private final ClassHierarchy hierarchy;
+    private final SlotZeroResolver slotZero;
 
     /** Р’С‹С‡РёСЃР»СЏРµС‚ РјР°РїРїРёРЅРі LabelNode -> РёРЅРґРµРєСЃ Р±Р»РѕРєР°. РњРµС‚РєР° РјРѕР¶РµС‚ Р±С‹С‚СЊ РІ Р»СЋР±РѕР№
      *  РїРѕР·РёС†РёРё Р±Р»РѕРєР° (РЅРµ С‚РѕР»СЊРєРѕ РїРµСЂРІРѕР№), С‚.Рє. try-range С‡Р°СЃС‚Рѕ РЅР°С‡РёРЅР°РµС‚СЃСЏ РІРЅСѓС‚СЂРё. */
@@ -85,6 +86,9 @@ public final class StructureToAst {
         this.labelToBlock = buildLabelMap(blocks);
         this.decryptor = decryptor;
         this.hierarchy = hierarchy;
+        // Версионно-точный резолвер слота 0 для instance-методов: по CFG решает,
+        // является ли слот 0 в точке *LOAD this'ом или переиспользованным спилл-значением.
+        this.slotZero = SlotZeroResolver.build(blocks, (method.access & Opcodes.ACC_STATIC) == 0);
     }
 
     /** Р“Р»Р°РІРЅР°СЏ С‚РѕС‡РєР° РІС…РѕРґР°. */
@@ -235,7 +239,7 @@ public final class StructureToAst {
         }
 
         // РєР»СЋС‡ вЂ” Р·РЅР°С‡РµРЅРёРµ РЅР° СЃС‚РµРєРµ РїРµСЂРµРґ switch
-        var emu = new BytecodeToExpr(names, slotTypes, decryptor);
+        var emu = newEmu();
         Ast.Expr key = emu.extractSwitchKey(bb.getInstructions());
         if (key == null) return null;
 
@@ -256,18 +260,23 @@ public final class StructureToAst {
         return new Ast.Switch(key, cases, dfltBody);
     }
 
-    /** РћРїРµСЂР°С‚РѕСЂС‹ РґР»СЏ РѕРґРЅРѕРіРѕ CFG-Р±Р»РѕРєР°: Р±Р°Р№С‚РєРѕРґ Р±Р»РѕРєР° -> (РїСЂРёСЃРІР°РёРІР°РЅРёСЏ + return). */
+/** РћРїРµСЂР°С‚РѕСЂС‹ РґР»СЏ РѕРґРЅРѕРіРѕ CFG-Р±Р»РѕРєР°: Р±Р°Р№С‚РєРѕРґ Р±Р»РѕРєР° -> (РїСЂРёСЃРІР°РёРІР°РЅРёСЏ + return). */
     private List<Ast.Stmt> blockToStmt(int blockIndex) {
         BasicBlock bb = blocks.get(blockIndex);
-        BytecodeToExpr emu = new BytecodeToExpr(names, slotTypes, decryptor);
+        BytecodeToExpr emu = newEmu();
         List<AbstractInsnNode> all = new ArrayList<>(bb.getInstructions());
         return emu.runBlock(all, false);
+    }
+
+    /** Эмулятор с привязанным версионным резолвером слота 0. */
+    private BytecodeToExpr newEmu() {
+        return new BytecodeToExpr(names, slotTypes, decryptor).withSlotZero(slotZero);
     }
 
     /** РЈСЃР»РѕРІРёРµ Р±Р»РѕРєР° (РґРѕ СѓСЃР»РѕРІРЅРѕРіРѕ РїРµСЂРµС…РѕРґР°). */
     private Ast.Expr condFrom(int blockIndex) {
         BasicBlock bb = blocks.get(blockIndex);
-        BytecodeToExpr emu = new BytecodeToExpr(names, slotTypes, decryptor);
+        BytecodeToExpr emu = newEmu();
         List<AbstractInsnNode> prefix = new ArrayList<>();
         for (AbstractInsnNode n : bb.getInstructions()) {
             prefix.add(n); // Р±РµСЂС‘Рј Р’РЎР• РёРЅСЃС‚СЂСѓРєС†РёРё, РІРєР»СЋС‡Р°СЏ С‚РµСЂРјРёРЅР°Р»СЊРЅС‹Р№ IFxx

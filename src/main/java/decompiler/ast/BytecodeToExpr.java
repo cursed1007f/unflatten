@@ -41,6 +41,8 @@ public final class BytecodeToExpr {
     /** Тип слота -> имя (заполняется извне анализатором типов). */
     private final String[] slotTypes;
     private final StringDecryptor decryptor; // может быть null — строки не расшифровываются
+    /** Версионно-точный резолвер слота 0 (this vs спилл) в instance-методах. */
+    private SlotZeroResolver slotZero = SlotZeroResolver.none();
 
     public BytecodeToExpr(Ast.VarNameResolver names, String[] slotTypes) {
         this(names, slotTypes, null);
@@ -51,6 +53,12 @@ public final class BytecodeToExpr {
         this.names = names;
         this.slotTypes = slotTypes;
         this.decryptor = decryptor;
+    }
+
+    /** Привязывает версионный резолвер слота 0 (для instance-методов). */
+    public BytecodeToExpr withSlotZero(SlotZeroResolver resolver) {
+        if (resolver != null) this.slotZero = resolver;
+        return this;
     }
 
     /** Упрощённый конструктор без типов (имена по слотам). */
@@ -199,11 +207,19 @@ public final class BytecodeToExpr {
             // --- локальные ---
             case Opcodes.ILOAD, Opcodes.LLOAD, Opcodes.FLOAD, Opcodes.DLOAD, Opcodes.ALOAD -> {
                 int var = ((VarInsnNode) n).var;
-                // Числовые загрузки из слота 0 в instance-методе — это спилл-значение,
-                // а не this: контекстное имя по опкоду (чинит >= this).
-                String nm = (n.getOpcode() == Opcodes.ALOAD)
-                        ? name(var)
-                        : nameForLoad(var, n.getOpcode());
+                // Версионно-точная типизация слота 0: если резолвер знает, что здесь
+                // слот 0 — спилл (перезаписан), а не this, даём примитивное имя
+                // (закрывает >= this, this == null, this[индекс] полностью по данным,
+                // а не по статической таблице slotTypes).
+                String nm;
+                if (var == 0) {
+                    String s0 = slotZero.nameForSlot0Load((VarInsnNode) n);
+                    nm = s0 != null ? s0 : name(var);
+                } else {
+                    nm = (n.getOpcode() == Opcodes.ALOAD)
+                            ? name(var)
+                            : nameForLoad(var, n.getOpcode());
+                }
                 Ast.Var lv = new Ast.Var(nm);
                 if (n.getOpcode() == Opcodes.ILOAD && isBooleanSlot(var)) booleanExprs.add(lv);
                 stack.push(lv);
