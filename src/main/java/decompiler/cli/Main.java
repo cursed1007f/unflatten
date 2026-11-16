@@ -1,6 +1,7 @@
 package decompiler.cli;
 
 import decompiler.ast.JavaClassPrinter;
+import decompiler.ast.JavaExporter;
 import decompiler.cfganalyzer.CfgBuilder;
 import decompiler.cfganalyzer.CfgDumper;
 import decompiler.dumper.ClassStructureDumper;
@@ -40,6 +41,7 @@ public final class Main {
             System.err.println("        java -jar java-decompiler.jar app.jar --ssa");
             System.err.println("        java -jar java-decompiler.jar app.jar --deflat");
             System.err.println("        java -jar java-decompiler.jar app.jar --structure");
+            System.err.println("        java -jar java-decompiler.jar app.jar --export <выходная-папка>");
             System.exit(2);
         }
 
@@ -54,16 +56,24 @@ public final class Main {
         boolean deflatMode = false;
         boolean structureMode = false;
         boolean astMode = false;
+        String exportDir = null;
         for (int i = 1; i < args.length; i++) {
             if (args[i].equals("--cfg")) cfgMode = true;
             if (args[i].equals("--ssa")) ssaMode = true;
             if (args[i].equals("--deflat")) deflatMode = true;
             if (args[i].equals("--structure")) structureMode = true;
             if (args[i].equals("--ast")) astMode = true;
+            if (args[i].equals("--export") && i + 1 < args.length) {
+                exportDir = args[i + 1];
+                i++;
+            }
         }
 
         try {
-            if (astMode) {
+            if (exportDir != null) {
+                var res = JavaExporter.export(jar, Path.of(exportDir));
+                System.err.printf("Exported %d class(es) (errors=%d) to %s%n", res.classes, res.errors, res.outDir);
+            } else if (astMode) {
                 int n = runAst(jar);
                 System.err.printf("Java AST generated for %d method(s) from %s%n", n, jar);
             } else if (structureMode) {
