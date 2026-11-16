@@ -106,7 +106,12 @@ public final class Ast {
     }
 
     /** Вызов метода: target.name(args) или static name(args). */
-    public record Call(Expr target, String name, List<Expr> args, boolean isStatic) implements Expr {
+    public record Call(Expr target, String name, List<Expr> args, boolean isStatic, String retDesc) implements Expr {
+        /** Без типа возврата (служебные выражения вроде thrown/cast). */
+        public Call(Expr target, String name, List<Expr> args, boolean isStatic) {
+            this(target, name, args, isStatic, null);
+        }
+
         @Override
         public String toString() {
             String base = (target != null ? target + "." : "") + name;

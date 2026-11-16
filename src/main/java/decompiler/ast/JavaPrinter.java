@@ -142,9 +142,15 @@ public final class JavaPrinter {
                     dims = d;
                     elem = Ast.friendlyType(desc.substring(d));
                 } else {
-                    // Lcom/foo;[] — один массив ссылочного типа
-                    dims = desc.lastIndexOf('[') == -1 ? 1 : desc.length() - desc.lastIndexOf('[');
-                    elem = Ast.friendlyType(desc.substring(0, desc.lastIndexOf('[')));
+                    // Lfoo;[] / Lfoo;[][] — считаем ХВОСТОВЫЕ пары "[]" (иначе [0][] — баг)
+                    dims = 0;
+                    String base = desc;
+                    while (base.endsWith("[]")) {
+                        dims++;
+                        base = base.substring(0, base.length() - 2);
+                    }
+                    if (dims == 0) dims = 1;
+                    elem = Ast.friendlyType(base);
                 }
                 sb.append(elem);
                 int idx = 0;

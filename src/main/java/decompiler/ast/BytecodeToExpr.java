@@ -208,7 +208,9 @@ public final class BytecodeToExpr {
             // --- new + dup + init ---
             case Opcodes.NEW -> {
                 TypeInsnNode t = (TypeInsnNode) n;
-                stack.push(new Ast.NewObject(t.desc, new ArrayList<>()));
+                // t.desc — internal-имя (java/util/Random); friendlyType ждёт дескриптор L...;
+                String newDesc = t.desc.startsWith("[") ? t.desc : "L" + t.desc + ";";
+                stack.push(new Ast.NewObject(newDesc, new ArrayList<>()));
             }
             case Opcodes.DUP -> stack.push(stack.peek());
             // --- условные переходы (даем выражение, если stopBeforeReturn=false) ---
@@ -220,7 +222,13 @@ public final class BytecodeToExpr {
             }
             case Opcodes.IFEQ, Opcodes.IFNE, Opcodes.IFLT, Opcodes.IFGE, Opcodes.IFGT, Opcodes.IFLE -> {
                 Ast.Expr v = pop();
-                stack.push(new Ast.Binary(cmpOp(n.getOpcode(), false), v, new Ast.Literal(0)));
+                // boolean-выражение не сравниваем с 0: hasNext() != 0 -> hasNext()
+                if (isBooleanExpr(v)
+                        && (n.getOpcode() == Opcodes.IFEQ || n.getOpcode() == Opcodes.IFNE)) {
+                    stack.push(n.getOpcode() == Opcodes.IFEQ ? new Ast.Unary("!", v) : v);
+                } else {
+                    stack.push(new Ast.Binary(cmpOp(n.getOpcode(), false), v, new Ast.Literal(0)));
+                }
             }
             case Opcodes.IFNULL, Opcodes.IFNONNULL -> {
                 Ast.Expr v = pop();
@@ -267,12 +275,22 @@ public final class BytecodeToExpr {
             case Opcodes.CHECKCAST -> {
                 TypeInsnNode t = (TypeInsnNode) n;
                 Ast.Expr v = pop();
-                stack.push(new Ast.Call(v, "cast", List.of(new Ast.Var(Ast.friendlyType(t.desc))), false));
+                if ("java/lang/Object".equals(t.desc)) {
+                    stack.push(v); // каст в Object бессмыслен — опускаем
+                } else {
+                    String typeName = t.desc.startsWith("[")
+                            ? Ast.friendlyType(t.desc)                 // уже дескриптор массива
+                            : Ast.friendlyType("L" + t.desc + ";");    // internal-имя -> дескриптор
+                    stack.push(new Ast.Call(v, "cast", List.of(new Ast.Var(typeName)), false));
+                }
             }
             case Opcodes.INSTANCEOF -> {
                 TypeInsnNode t = (TypeInsnNode) n;
                 Ast.Expr v = pop();
-                stack.push(new Ast.Binary("instanceof", v, new Ast.Var(Ast.friendlyType(t.desc))));
+                String typeName = t.desc.startsWith("[")
+                        ? Ast.friendlyType(t.desc)
+                        : Ast.friendlyType("L" + t.desc + ";");
+                stack.push(new Ast.Binary("instanceof", v, new Ast.Var(typeName)));
             }
             // --- конвертации int/long/float/double ---
             case Opcodes.I2L -> conv("(long)");
@@ -372,7 +390,8 @@ public final class BytecodeToExpr {
             return;
         }
 
-        Ast.Call call = new Ast.Call(target, m.name, args, m.getOpcode() == Opcodes.INVOKESTATIC);
+        String retDesc = m.desc.substring(m.desc.indexOf(')') + 1);
+        Ast.Call call = new Ast.Call(target, m.name, args, m.getOpcode() == Opcodes.INVOKESTATIC, retDesc);
         // void-вызов — оператор, а не значение
         if (m.desc.endsWith(")V")) {
             stmts.add(new Ast.ExprStmt(call));
@@ -443,6 +462,19 @@ public final class BytecodeToExpr {
     private Ast.Expr pop() {
         if (stack.isEmpty()) return new Ast.Literal(0);
         return stack.pop();
+    }
+
+    /** Выражение заведомо булева типа (сравнение/логика/вызов с типом Z). */
+    private static boolean isBooleanExpr(Ast.Expr e) {
+        if (e instanceof Ast.Binary b) {
+            String op = b.op();
+            return op.equals("==") || op.equals("!=") || op.equals("<") || op.equals("<=")
+                    || op.equals(">") || op.equals(">=") || op.equals("&&") || op.equals("||")
+                    || op.equals("instanceof");
+        }
+        if (e instanceof Ast.Unary u) return u.op().equals("!");
+        if (e instanceof Ast.Call c) return "Z".equals(c.retDesc());
+        return false;
     }
 
     /** Оператор сравнения для IF-кода. */
