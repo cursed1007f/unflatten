@@ -88,8 +88,37 @@ public final class TypeInference {
                 }
             }
         }
+        // После кадров: грубая классификация по STORE-опкоду, точна для примитивов
+        // и окончательна. Кадры (BasicVerifier) для зафлэттенных методов падают или
+        // перетирают слот 0 обратно в объект (если в методе есть и ALOAD 0 this, и
+        // переиспользование слота 0 под int). Здесь примитивная классификация
+        // преобладает, чтобы слот 0, куда писали ISTORE, не рендерился как "this"
+        // (иначе выходит "new double[this]", "iVar29 >= this").
+        classifyPrimitiveStores(mn, out);
         refineBooleans(mn, out);
         return out;
+    }
+
+    /**
+     * Грубая классификация типов локальных по STORE-опкоду. Не требует кадров и
+     * точна для примитивов. Кадры для сильно зафлэттенных методов падают, из-за
+     * чего слот 0, переиспользованный под int-временную, оставался именем класса
+     * и рендерился как {@code this} (напр. {@code new double[this]}).
+     */
+    private static void classifyPrimitiveStores(MethodNode mn, String[] types) {
+        if (mn == null || mn.instructions == null || types == null) return;
+        int n = types.length;
+        for (AbstractInsnNode a = mn.instructions.getFirst(); a != null; a = a.getNext()) {
+            if (!(a instanceof VarInsnNode v)) continue;
+            int s = v.var;
+            if (s < 0 || s >= n) continue;
+            switch (v.getOpcode()) {
+                case Opcodes.ISTORE -> types[s] = "int";
+                case Opcodes.LSTORE -> types[s] = "long";
+                case Opcodes.FSTORE -> types[s] = "float";
+                case Opcodes.DSTORE -> types[s] = "double";
+            }
+        }
     }
 
     /**

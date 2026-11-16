@@ -55,8 +55,10 @@ public final class Ast {
          * p0,p1,... по порядковому номеру; остальные — по типу: iVar/lVar/oVar...
          */
         public String name(int slot, String typeName) {
-            // слот 0 в instance-методе — это this
-            if (thisOffset == 1 && slot == 0) return "this";
+            // слот 0 в instance-методе — это this, если в него не писали примитив.
+            // Обфускатор (CFF) переиспользует слот 0 под int-временные; тогда это
+            // уже не this, а локальная слот 0.
+            if (thisOffset == 1 && slot == 0 && !isPrimitiveName(typeName)) return "this";
             String base;
             if (slot >= thisOffset && slot < thisOffset + paramCount) {
                 base = "p" + (slot - thisOffset);
@@ -80,6 +82,15 @@ public final class Ast {
                 base = prefix + "Var" + slot;
             }
             return base;
+        }
+
+        /** true, если friendly-имя типа соответствует примитиву (int/long/.../byte). */
+        static boolean isPrimitiveName(String typeName) {
+            if (typeName == null) return false;
+            String t = typeName.toLowerCase();
+            return t.contains("int") || t.contains("boolean") || t.contains("byte")
+                    || t.contains("short") || t.contains("char")
+                    || t.contains("long") || t.contains("double") || t.contains("float");
         }
     }
 
