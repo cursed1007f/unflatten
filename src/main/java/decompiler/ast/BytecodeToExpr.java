@@ -32,6 +32,8 @@ public final class BytecodeToExpr {
 
     private final Deque<Ast.Expr> stack = new ArrayDeque<>();
     private final List<Ast.Stmt> stmts = new ArrayList<>();
+    /** Блок уже завершён return/throw — остальные инструкции недостижимы. */
+    private boolean terminated;
     private final Ast.VarNameResolver names;
     /** Тип слота -> имя (заполняется извне анализатором типов). */
     private final String[] slotTypes;
@@ -63,6 +65,7 @@ public final class BytecodeToExpr {
     public List<Ast.Stmt> runBlock(List<AbstractInsnNode> insns, boolean stopBeforeReturn) {
         stack.clear();
         stmts.clear();
+        terminated = false;
         for (AbstractInsnNode n : insns) {
             consume(n, stopBeforeReturn);
         }
@@ -78,6 +81,7 @@ public final class BytecodeToExpr {
     public Ast.Expr runExpr(List<AbstractInsnNode> insns) {
         stack.clear();
         stmts.clear();
+        terminated = false;
         for (AbstractInsnNode n : insns) {
             consume(n, false);
         }
@@ -114,6 +118,7 @@ public final class BytecodeToExpr {
 
     private void consume(AbstractInsnNode n, boolean stopBeforeReturn) {
         if (n.getOpcode() < 0) return; // label/line/frame
+        if (terminated) return; // недостижимый код после return/throw
         // условный переход: обрываем разбор (условие построено отдельно)
         if (stopBeforeReturn && n instanceof JumpInsnNode && n.getOpcode() != Opcodes.GOTO) {
             return;
@@ -287,8 +292,11 @@ public final class BytecodeToExpr {
             case Opcodes.I2S -> conv("(short)");
             // --- управление ---
             case Opcodes.ATHROW -> {
+                // мёртвый ATHROW без объекта-исключения (после return) — не эмитим throw(0)
+                if (stack.isEmpty()) return;
                 Ast.Expr v = pop();
                 stmts.add(new Ast.ExprStmt(new Ast.Call(null, "throw", List.of(v), false)));
+                terminated = true;
                 stack.clear();
             }
             case Opcodes.MONITORENTER, Opcodes.MONITOREXIT -> {
@@ -306,10 +314,12 @@ public final class BytecodeToExpr {
             case Opcodes.IRETURN, Opcodes.LRETURN, Opcodes.FRETURN, Opcodes.DRETURN, Opcodes.ARETURN -> {
                 Ast.Expr v = pop();
                 stmts.add(new Ast.Return(v));
+                terminated = true;
                 stack.clear(); // очистка после return — значение "протекать" не должно
             }
             case Opcodes.RETURN -> {
                 stmts.add(new Ast.Return(null));
+                terminated = true;
                 stack.clear();
             }
             // --- GOTO: терминатор без значения; стек очищаем ---
