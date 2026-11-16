@@ -461,7 +461,9 @@ public final class BytecodeToExpr {
     private void bin(String op) {
         Ast.Expr r = pop();
         Ast.Expr l = pop();
-        stack.push(new Ast.Binary(op, l, r));
+        // свёртка константной арифметики: -191 + 193 -> 2 (и во всех выражениях)
+        Object cv = Ast.constValue(new Ast.Binary(op, l, r));
+        stack.push(cv != null ? new Ast.Literal(cv) : new Ast.Binary(op, l, r));
     }
 
     /** Конвертация типа: (targetType)operand. */
@@ -485,7 +487,9 @@ public final class BytecodeToExpr {
     }
 
     private void un(String op) {
-        stack.push(new Ast.Unary(op, pop()));
+        Ast.Expr o = pop();
+        Object cv = Ast.constValue(new Ast.Unary(op, o));
+        stack.push(cv != null ? new Ast.Literal(cv) : new Ast.Unary(op, o));
     }
 
     private Ast.Expr pop() {
