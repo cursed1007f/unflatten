@@ -236,7 +236,10 @@ public final class BytecodeToExpr {
                 String newDesc = t.desc.startsWith("[") ? t.desc : "L" + t.desc + ";";
                 stack.push(new Ast.NewObject(newDesc, new ArrayList<>()));
             }
-            case Opcodes.DUP -> stack.push(stack.peek());
+            case Opcodes.DUP -> {
+                // пустой стек (например, DUP после store) — peek() вернул бы null
+                if (!stack.isEmpty()) stack.push(stack.peek());
+            }
             // --- условные переходы (даем выражение, если stopBeforeReturn=false) ---
             case Opcodes.IF_ICMPEQ, Opcodes.IF_ICMPNE, Opcodes.IF_ICMPLT, Opcodes.IF_ICMPGE,
                  Opcodes.IF_ICMPGT, Opcodes.IF_ICMPLE -> {
@@ -290,10 +293,12 @@ public final class BytecodeToExpr {
                 stack.push(new Ast.NewObject("L" + t.desc + ";[]", List.of(size)));
             }
             case Opcodes.MULTIANEWARRAY -> {
-                // размерностей может быть несколько — упрощённо берём последний
-                Ast.Expr size = pop();
-                TypeInsnNode t = (TypeInsnNode) n;
-                stack.push(new Ast.NewObject(t.desc, List.of(size)));
+                // multi-мерный массив: dims размеров на стеке (по порядку)
+                org.objectweb.asm.tree.MultiANewArrayInsnNode t =
+                        (org.objectweb.asm.tree.MultiANewArrayInsnNode) n;
+                List<Ast.Expr> sizes = new ArrayList<>();
+                for (int d = 0; d < t.dims; d++) sizes.add(0, pop());
+                stack.push(new Ast.NewObject(t.desc, sizes));
             }
             // --- касты и проверки ---
             case Opcodes.CHECKCAST -> {

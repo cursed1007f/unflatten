@@ -270,7 +270,8 @@ public final class Main {
             try {
                 System.out.print(JavaClassPrinter.printClass(cn, decryptor, hierarchy));
             } catch (Exception ex) {
-                System.out.println("  // class: " + ex);
+                StackTraceElement at = ex.getStackTrace().length > 0 ? ex.getStackTrace()[0] : null;
+                System.out.println("  // class: " + ex + (at != null ? "  @ " + at : ""));
             }
             System.out.println();
             methods[0]++;

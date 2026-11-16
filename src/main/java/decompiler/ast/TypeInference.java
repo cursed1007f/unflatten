@@ -88,7 +88,73 @@ public final class TypeInference {
                 }
             }
         }
+        refineBooleans(mn, out);
         return out;
+    }
+
+    /**
+     * Эвристика boolean-локальных: слот int-типа считаем boolean, если он только
+     * пишется литералами 0/1 и только используется как условие (ILOAD прямо перед
+     * IFEQ/IFNE). Тогда {@code iVar != 0} эквивалентно {@code iVar}, и печать
+     * {@code if (iVar)} корректнее. Трансформация безопасна: локальные в выводе
+     * не объявляются, а значения в таких местах эквивалентны.
+     */
+    private static void refineBooleans(MethodNode mn, String[] types) {
+        if (mn == null || mn.instructions == null || types == null) return;
+        AbstractInsnNode[] insns = mn.instructions.toArray();
+        int n = types.length;
+        boolean[] ok = new boolean[n];
+        boolean[] hasCond = new boolean[n];
+        boolean[] bad = new boolean[n];
+        java.util.Arrays.fill(ok, true);
+
+        for (int i = 0; i < insns.length; i++) {
+            AbstractInsnNode insn = insns[i];
+            if (insn instanceof org.objectweb.asm.tree.IincInsnNode inc) {
+                if (inc.var >= 0 && inc.var < n) bad[inc.var] = true;
+                continue;
+            }
+            if (!(insn instanceof VarInsnNode v)) continue;
+            int s = v.var;
+            if (s < 0 || s >= n) continue;
+            int op = v.getOpcode();
+            if (op == Opcodes.ISTORE) {
+                AbstractInsnNode prev = prevReal(insns, i);
+                boolean lit = prev instanceof org.objectweb.asm.tree.InsnNode pi
+                        && (pi.getOpcode() == Opcodes.ICONST_0 || pi.getOpcode() == Opcodes.ICONST_1);
+                if (!lit && prev instanceof org.objectweb.asm.tree.IntInsnNode ii
+                        && (ii.getOpcode() == Opcodes.BIPUSH || ii.getOpcode() == Opcodes.SIPUSH)
+                        && (ii.operand == 0 || ii.operand == 1)) {
+                    lit = true;
+                }
+                if (!lit) ok[s] = false;
+            } else if (op == Opcodes.ILOAD) {
+                AbstractInsnNode next = nextReal(insns, i);
+                if (next instanceof org.objectweb.asm.tree.JumpInsnNode j
+                        && (j.getOpcode() == Opcodes.IFEQ || j.getOpcode() == Opcodes.IFNE)) {
+                    hasCond[s] = true;
+                } else {
+                    bad[s] = true;
+                }
+            } else if (op >= Opcodes.ISTORE && op <= Opcodes.ASTORE) {
+                ok[s] = false;
+            }
+        }
+        for (int s = 0; s < n; s++) {
+            if (ok[s] && hasCond[s] && !bad[s] && "int".equals(types[s])) {
+                types[s] = "boolean";
+            }
+        }
+    }
+
+    private static AbstractInsnNode prevReal(AbstractInsnNode[] insns, int i) {
+        for (int k = i - 1; k >= 0; k--) if (insns[k].getOpcode() >= 0) return insns[k];
+        return null;
+    }
+
+    private static AbstractInsnNode nextReal(AbstractInsnNode[] insns, int i) {
+        for (int k = i + 1; k < insns.length; k++) if (insns[k].getOpcode() >= 0) return insns[k];
+        return null;
     }
 
     /** Пробует анализ фреймов настоящего метода; null, если упал. */
