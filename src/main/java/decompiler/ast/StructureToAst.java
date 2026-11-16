@@ -278,9 +278,11 @@ public final class StructureToAst {
         return emu.runBlock(all, false);
     }
 
-    /** Эмулятор с привязанным версионным резолвером слота 0. */
+    /** Эмулятор с привязанным версионным резолвером слота 0 и признаком boolean-возврата. */
     private BytecodeToExpr newEmu() {
-        return new BytecodeToExpr(names, slotTypes, decryptor).withSlotZero(slotZero);
+        return new BytecodeToExpr(names, slotTypes, decryptor)
+                .withSlotZero(slotZero)
+                .booleanReturning(isBooleanReturn(method.desc));
     }
 
     /** РЈСЃР»РѕРІРёРµ Р±Р»РѕРєР° (РґРѕ СѓСЃР»РѕРІРЅРѕРіРѕ РїРµСЂРµС…РѕРґР°). */
@@ -364,5 +366,11 @@ public final class StructureToAst {
     /** Р§РёСЃР»Рѕ РїР°СЂР°РјРµС‚СЂРѕРІ РјРµС‚РѕРґР° (Р±РµР· this). */
     private int argCount(String desc) {
         return Type.getArgumentTypes(desc).length;
+    }
+
+    /** Тип возврата метода из дескриптора — boolean (»)Z). */
+    private static boolean isBooleanReturn(String desc) {
+        int rp = desc.lastIndexOf(')');
+        return rp >= 0 && rp + 1 < desc.length() && desc.charAt(rp + 1) == 'Z';
     }
 }

@@ -43,6 +43,8 @@ public final class BytecodeToExpr {
     private final StringDecryptor decryptor; // может быть null — строки не расшифровываются
     /** Версионно-точный резолвер слота 0 (this vs спилл) в instance-методах. */
     private SlotZeroResolver slotZero = SlotZeroResolver.none();
+    /** Метод возвращает boolean (IRETURN 0/1 -> return false/true). */
+    private boolean booleanReturn;
 
     public BytecodeToExpr(Ast.VarNameResolver names, String[] slotTypes) {
         this(names, slotTypes, null);
@@ -58,6 +60,12 @@ public final class BytecodeToExpr {
     /** Привязывает версионный резолвер слота 0 (для instance-методов). */
     public BytecodeToExpr withSlotZero(SlotZeroResolver resolver) {
         if (resolver != null) this.slotZero = resolver;
+        return this;
+    }
+
+    /** Признак, что метод возвращает boolean (IRETURN 0/1 -> return false/true). */
+    public BytecodeToExpr booleanReturning(boolean b) {
+        this.booleanReturn = b;
         return this;
     }
 
@@ -422,6 +430,8 @@ public final class BytecodeToExpr {
             // --- return: берём верх стека и эмитим return ---
             case Opcodes.IRETURN, Opcodes.LRETURN, Opcodes.FRETURN, Opcodes.DRETURN, Opcodes.ARETURN -> {
                 Ast.Expr v = pop();
+                // boolean-метод: IRETURN 0/1 -> return false/true (вместо return Literal(0))
+                if (booleanReturn && n.getOpcode() == Opcodes.IRETURN) v = boolLit(v, true);
                 stmts.add(new Ast.Return(v));
                 terminated = true;
                 stack.clear(); // очистка после return — значение "протекать" не должно
