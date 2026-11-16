@@ -184,7 +184,14 @@ public final class ClassRenamer {
 
     /** Похоже ли имя на случайную обфускацию (эвристика). */
     private static boolean looksRandom(String s) {
-        if (s == null || s.length() < 5) return false;
+        if (s == null || s.isEmpty()) return false;
+        // Не валидный Java-идентификатор (содержит ?/-/. или иной не-идентификатор) —
+        // это маска обфускатора спец-символом (напр. '?'). Такой класс точно переименовать.
+        if (!Character.isJavaIdentifierStart(s.charAt(0))) return true;
+        for (int i = 1; i < s.length(); i++) {
+            if (!Character.isJavaIdentifierPart(s.charAt(i))) return true;
+        }
+        if (s.length() < 5) return false;
         // «спам» из похожих символов I/l/1/O/0 (IllIlIIIIIIlII) — типичный обфускатор
         int confusable = 0;
         for (int i = 0; i < s.length(); i++) {

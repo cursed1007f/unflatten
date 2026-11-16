@@ -4,6 +4,7 @@ import decompiler.ast.JavaClassPrinter;
 import decompiler.ast.JavaExporter;
 import decompiler.ast.ClassHierarchy;
 import decompiler.ast.EmbeddedSecretFinder;
+import decompiler.ast.QualityChecker;
 import decompiler.ast.StringDecryptor;
 import decompiler.cfganalyzer.CfgBuilder;
 import decompiler.cfganalyzer.CfgDumper;
@@ -260,15 +261,18 @@ public final class Main {
     /** Генерация Java-кода: печать полного класса (поля + методы через пайплайн). */
     private static int runAst(Path jar, StringDecryptor decryptor, ClassHierarchy hierarchy) throws Exception {
         final int[] methods = {0};
+        // Чекер качества агрегирует маркеры по всем классам и печатает отчёт в stderr.
+        final QualityChecker.Report q = new QualityChecker.Report();
         JarParser.parse(jar, (p, entry, node) -> {
             ClassNode cn = node;
-            // заголовок-комментарий: показываем переименованный путь, если есть
             String internal = entry.endsWith(".class")
                     ? entry.substring(0, entry.length() - 6) : entry;
             String display = decompiler.ast.ClassRenamer.renameInternal(internal);
             System.out.println("// ===== " + display + ".class =====");
             try {
-                System.out.print(JavaClassPrinter.printClass(cn, decryptor, hierarchy));
+                String java = JavaClassPrinter.printClass(cn, decryptor, hierarchy);
+                System.out.print(java);
+                q.merge(QualityChecker.scan(java));
             } catch (Exception ex) {
                 StackTraceElement at = ex.getStackTrace().length > 0 ? ex.getStackTrace()[0] : null;
                 System.out.println("  // class: " + ex + (at != null ? "  @ " + at : ""));
@@ -276,6 +280,7 @@ public final class Main {
             System.out.println();
             methods[0]++;
         });
+        System.err.println(q.summary());
         return methods[0];
     }
 

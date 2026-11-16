@@ -119,6 +119,31 @@ public final class BytecodeToExpr {
         return names.name(slot, type);
     }
 
+    /**
+     * Контекстное имя слота в точке загрузки ({@code *LOAD}).
+     *
+     * <p>Корень {@code >= this} (см. BUGREPORT.md): в спилл/де-флаттнинг-коде
+     * обфускатор переиспользует слот 0 instance-метода под int-временную наряду
+     * с {@code this}. Статический {@code slotTypes[0]} неоднозначен (по месту
+     * может быть и объект, и int), поэтому {@link #name(int)} звал слот 0
+     * «this» и в числовом сравнении выходило {@code this >= ...}. Числовая
+     * загрузка ({@code *LOAD}) из слота 0 не может быть {@code this} — это
+     * всегда спилл-значение, значит имя надо брать по опкоду загрузки.</p>
+     */
+    private String nameForLoad(int slot, int loadOpcode) {
+        if (slot == 0 && "this".equals(name(0))) {
+            // instance-метод: слот 0 статически называется «this», но сейчас его
+            // грузят числом — это спилл, а не объект. Даём примитивное имя.
+            return switch (loadOpcode) {
+                case Opcodes.LLOAD -> "lVar0";
+                case Opcodes.FLOAD -> "fVar0";
+                case Opcodes.DLOAD -> "dVar0";
+                default -> "iVar0"; // ILOAD и всё прочее числовое
+            };
+        }
+        return name(slot);
+    }
+
     /** Слот объявлен как boolean? */
     private boolean isBooleanSlot(int var) {
         return slotTypes != null && var >= 0 && var < slotTypes.length
@@ -174,7 +199,12 @@ public final class BytecodeToExpr {
             // --- локальные ---
             case Opcodes.ILOAD, Opcodes.LLOAD, Opcodes.FLOAD, Opcodes.DLOAD, Opcodes.ALOAD -> {
                 int var = ((VarInsnNode) n).var;
-                Ast.Var lv = new Ast.Var(name(var));
+                // Числовые загрузки из слота 0 в instance-методе — это спилл-значение,
+                // а не this: контекстное имя по опкоду (чинит >= this).
+                String nm = (n.getOpcode() == Opcodes.ALOAD)
+                        ? name(var)
+                        : nameForLoad(var, n.getOpcode());
+                Ast.Var lv = new Ast.Var(nm);
                 if (n.getOpcode() == Opcodes.ILOAD && isBooleanSlot(var)) booleanExprs.add(lv);
                 stack.push(lv);
             }

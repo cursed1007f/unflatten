@@ -114,7 +114,12 @@ public final class JavaPrinter {
             }
             return expr(b.left()) + " " + b.op() + " " + expr(b.right());
         }
-        if (e instanceof Ast.Unary u) return u.op() + "(" + expr(u.operand()) + ")";
+        if (e instanceof Ast.Unary u) {
+            // Унарные операторы Java не обрамляются скобками: !x, -x, +x, ~x.
+            // (Было "!(x)", "-(x)" — читается хуже.)
+            String op = u.op();
+            return op + expr(u.operand());
+        }
         if (e instanceof Ast.Call c) {
             StringBuilder sb = new StringBuilder();
             if (c.target() != null) sb.append(expr(c.target())).append(".");
