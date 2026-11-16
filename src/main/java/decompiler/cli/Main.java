@@ -3,6 +3,7 @@ package decompiler.cli;
 import decompiler.ast.JavaClassPrinter;
 import decompiler.ast.JavaExporter;
 import decompiler.ast.ClassHierarchy;
+import decompiler.ast.EmbeddedSecretFinder;
 import decompiler.ast.StringDecryptor;
 import decompiler.cfganalyzer.CfgBuilder;
 import decompiler.cfganalyzer.CfgDumper;
@@ -76,16 +77,23 @@ public final class Main {
             }
         }
 
-        // дешифратор строк: создаём только если задан --key
+        // дешифратор строк: создаём если задан --key, иначе пробуем извлечь
+        // вшитый в байткод секрет (non-native схема с master()).
         StringDecryptor decryptor = null;
         try {
             if (keyPath != null && Files.isRegularFile(keyPath)) {
                 decryptor = StringDecryptor.fromKeyFile(keyPath.toFile());
-                // загрузить .dat из самого jar
                 decryptor.load(findDatResource(jar));
                 System.err.println("Строки будут расшифрованы (ключ: " + keyPath + ")");
             } else if (keyPath != null) {
                 System.err.println("Предупреждение: --key файл не найден, строки будут помечены, не расшифрованы");
+            } else {
+                byte[] embedded = EmbeddedSecretFinder.findSecret(jar);
+                if (embedded != null) {
+                    decryptor = new StringDecryptor(embedded);
+                    decryptor.load(findDatResource(jar));
+                    System.err.println("Найден вшитый в байткод секрет, строки будут расшифрованы");
+                }
             }
         } catch (Exception ex) {
             System.err.println("Предупреждение: не удалось инициализировать дешифратор строк: " + ex);
