@@ -95,9 +95,9 @@ public final class QualityChecker {
             Pattern.compile("(?:^|[^\\w.])this\\s*([<>]=?|==|!=)\\s*(?!this\\.)[^\n.]?|"
                           + "[^\\w.]\\S*\\s*([<>]=?|==|!=)\\s*this(?!\\.)");
 
-    // arr[this], new double[this], foo[this]
+    // arr[this], new double[this], foo[this] — но НЕ [this.field] (валидный this.member-индекс)
     private static final Pattern THIS_INDEX =
-            Pattern.compile("\\[[^\\]]*\\bthis\\b[^\\]]*\\]");
+            Pattern.compile("\\[[^\\]]*\\bthis\\b(?!\\.)[^\\]]*\\]");
 
     // throw(0); throw(7);
     private static final Pattern THROW_NUM =

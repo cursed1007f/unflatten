@@ -272,6 +272,17 @@ public final class BytecodeToExpr {
                 Ast.Expr val = boolLit(v, "Z".equals(f.desc)); // boolean-поле: 0/1 -> false/true
                 stmts.add(new Ast.Assign(new Ast.Var("this." + f.name), val)); // упрощённо, field-write
             }
+            case Opcodes.GETFIELD -> {
+                // instance-поле: receiver.field. Ресивер берём со стека; если это
+                // голый «this» (ALOAD 0 без переиспользования) — печатается this.field.
+                // Это закрывает корень «>= this»: раньше GETFIELD не обрабатывался,
+                // стек портился и голый this прилипал к числовым операциям.
+                FieldInsnNode f = (FieldInsnNode) n;
+                Ast.Expr target = pop();
+                Ast.Field fld = new Ast.Field(target, f.name, false);
+                if ("Z".equals(f.desc)) booleanExprs.add(fld);
+                stack.push(fld);
+            }
             // --- вызовы ---
             case Opcodes.INVOKEVIRTUAL, Opcodes.INVOKESPECIAL, Opcodes.INVOKESTATIC, Opcodes.INVOKEINTERFACE ->
                     doCall((MethodInsnNode) n);
