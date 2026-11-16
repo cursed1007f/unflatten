@@ -101,7 +101,10 @@ public final class StructureToAst {
     private void convertNode(StructureNode node, List<Ast.Stmt> out) {
         switch (node.kind()) {
             case SEQUENCE -> {
-                for (StructureNode c : node.children()) convertNode(c, out);
+                for (StructureNode c : node.children()) {
+                    if (outTerminated(out)) return; // после return/throw дальнейшие узлы недостижимы
+                    convertNode(c, out);
+                }
             }
             case BLOCK -> {
                 // РµСЃР»Рё Р±Р»РѕРє вЂ” switch, СЃС‚СЂРѕРёРј switch; РµРіРѕ case-Р±Р»РѕРєРё РѕС‚РјРµС‡РµРЅС‹ РІ switchConsumed
@@ -125,6 +128,7 @@ public final class StructureToAst {
                 Ast.Expr cond = loopCond(header, bodyIdx);
                 List<Ast.Stmt> body = new ArrayList<>();
                 for (StructureNode c : node.children()) {
+                    if (outTerminated(body)) break; // недостижимые после return/throw узлы тела цикла
                     body.addAll(nodeToStmts(c));
                 }
                 // Свёртка непрозрачного предиката в УСЛОВИИ цикла:
@@ -149,12 +153,10 @@ public final class StructureToAst {
                 Object cv = Ast.constValue(cond);
                 if (cv instanceof Boolean b) {
                     if (b) {
+                        // терминирующую then-ветвь эмитим (вместе с её return),
+                        // а недостижимый else — нет (мёртвый код не выводим)
                         out.addAll(thenSt);
-                        boolean terminated = !thenSt.isEmpty() && (
-                                thenSt.get(thenSt.size() - 1) instanceof Ast.Return
-                                || (thenSt.get(thenSt.size() - 1) instanceof Ast.ExprStmt es0
-                                    && es0.expr() instanceof Ast.Call c0 && "throw".equals(c0.name())));
-                        if (!elseSt.isEmpty() && !terminated) out.addAll(elseSt);
+                        if (!elseSt.isEmpty() && !outTerminated(thenSt)) out.addAll(elseSt);
                     } else {
                         out.addAll(elseSt);
                     }
@@ -170,6 +172,14 @@ public final class StructureToAst {
         List<Ast.Stmt> out = new ArrayList<>();
         convertNode(node, out);
         return out;
+    }
+
+    /** Истинно, если список операторов уже завершается return или throw (дальше недостижимо). */
+    private static boolean outTerminated(List<Ast.Stmt> stmts) {
+        if (stmts.isEmpty()) return false;
+        Ast.Stmt last = stmts.get(stmts.size() - 1);
+        if (last instanceof Ast.Return) return true;
+        return last instanceof Ast.ExprStmt es && es.expr() instanceof Ast.Call c && "throw".equals(c.name());
     }
 
     /** Р•СЃР»Рё Р±Р»РѕРє вЂ” РЅР°С‡Р°Р»Рѕ try-range, СЃС‚СЂРѕРёС‚ Ast.TryCatch СЃ РїРµСЂРІС‹Рј catch'РµРј. */
