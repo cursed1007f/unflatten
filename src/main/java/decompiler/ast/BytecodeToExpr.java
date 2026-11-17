@@ -47,6 +47,13 @@ public final class BytecodeToExpr {
     private boolean booleanReturn;
     /** Внутреннее имя текущего класса (для super()/this() в конструкторах). */
     private String classOwner;
+    /**
+     * Обфускатор разрывает создание и инициализацию объекта:
+     * {@code new X; astore k; ...; aload k; invokespecial <init>}. Здесь храним
+     * «в переменной k лежит создаваемый NewObject» (по имени), чтобы при
+     * встрече {@code <init>} собрать корректное {@code k = new X(args)}.
+     */
+    private final java.util.Map<String, Ast.NewObject> pendingNew = new java.util.LinkedHashMap<>();
 
     public BytecodeToExpr(Ast.VarNameResolver names, String[] slotTypes) {
         this(names, slotTypes, null);
@@ -92,10 +99,16 @@ public final class BytecodeToExpr {
     public List<Ast.Stmt> runBlock(List<AbstractInsnNode> insns, boolean stopBeforeReturn) {
         stack.clear();
         stmts.clear();
+        pendingNew.clear();
         terminated = false;
         for (AbstractInsnNode n : insns) {
             consume(n, stopBeforeReturn);
         }
+        // Не встретился <init> для сохранённого new — не теряем присваивание.
+        for (var e : pendingNew.entrySet()) {
+            stmts.add(new Ast.Assign(new Ast.Var(e.getKey()), e.getValue()));
+        }
+        pendingNew.clear();
         return stmts;
     }
 
@@ -108,6 +121,7 @@ public final class BytecodeToExpr {
     public Ast.Expr runExpr(List<AbstractInsnNode> insns) {
         stack.clear();
         stmts.clear();
+        pendingNew.clear();
         terminated = false;
         for (AbstractInsnNode n : insns) {
             consume(n, false);
@@ -243,6 +257,16 @@ public final class BytecodeToExpr {
             case Opcodes.ISTORE, Opcodes.LSTORE, Opcodes.FSTORE, Opcodes.DSTORE, Opcodes.ASTORE -> {
                 int var = ((VarInsnNode) n).var;
                 Ast.Expr v = pop();
+                // Разрывная инициализация: new X сохраняется в локал до <init>.
+                // Откладываем присваивание до встречи invokespecial <init> на этом локале.
+                if (n.getOpcode() == Opcodes.ASTORE && v instanceof Ast.NewObject no && no.args().isEmpty()) {
+                    String nm = name(var);
+                    pendingNew.put(nm, no);
+                    // снять оставшуюся DUP-копию того же объекта, если она на стеке
+                    if (!stack.isEmpty() && stack.peek() == no) stack.pop();
+                    break;
+                }
+                pendingNew.remove(name(var));
                 Ast.Var tgt = new Ast.Var(name(var));
                 boolean isBool = n.getOpcode() == Opcodes.ISTORE && isBooleanSlot(var);
                 stmts.add(new Ast.Assign(tgt, boolLit(v, isBool)));
@@ -506,6 +530,20 @@ public final class BytecodeToExpr {
         if (m.name.equals("<init>") && target instanceof Ast.Var tv && "this".equals(tv.name())) {
             String keyword = classOwner != null && classOwner.equals(m.owner) ? "this" : "super";
             stmts.add(new Ast.ExprStmt(new Ast.Call(null, keyword, args, false, "V")));
+            return;
+        }
+
+        // --- конструктор на локалке с отложенным new (разрывная инициализация) ---
+        // new X; astore k; ...; aload k; invokespecial <init>(args) -> k = new X(args)
+        if (m.name.equals("<init>") && target instanceof Ast.Var tv2 && pendingNew.containsKey(tv2.name())) {
+            Ast.NewObject base = pendingNew.remove(tv2.name());
+            stmts.add(new Ast.Assign(new Ast.Var(tv2.name()), new Ast.NewObject(base.desc(), args)));
+            return;
+        }
+
+        // --- остаточный невалидный <init> на переменной/литерале (стек испорчен) ---
+        // Печатать `p0.<init>(...)`, `16.0.<init>(...)` невалидно — подавляем.
+        if (m.name.equals("<init>")) {
             return;
         }
 
