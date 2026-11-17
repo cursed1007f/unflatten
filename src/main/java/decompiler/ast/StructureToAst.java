@@ -773,7 +773,7 @@ public final class StructureToAst {
                 if (sw != null) {
                     out.add(sw);
                 } else {
-                    out.addAll(blockToStmt(idx));
+                    out.add(new Ast.Block(blockToStmt(idx)));
                 }
             }
             case LOOP -> {
