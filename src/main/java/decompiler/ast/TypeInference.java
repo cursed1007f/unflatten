@@ -3,12 +3,21 @@ package decompiler.ast;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.FieldInsnNode;
+import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.VarInsnNode;
 import org.objectweb.asm.tree.analysis.Analyzer;
+import org.objectweb.asm.tree.analysis.AnalyzerException;
+import org.objectweb.asm.tree.analysis.BasicInterpreter;
 import org.objectweb.asm.tree.analysis.BasicValue;
 import org.objectweb.asm.tree.analysis.Frame;
 import org.objectweb.asm.tree.analysis.SimpleVerifier;
+
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Вывод типов локальных слотов метода.
@@ -83,7 +92,10 @@ public final class TypeInference {
                         try { val = f.getLocal(v.var); } catch (Exception ignored) { }
                     }
                     if (val != null && val.getType() != null) {
-                        out[v.var] = friendly(val.getType());
+                        // Конкретный тип не затираем более общим: слот переиспользуется,
+                        // и последний store вполне может давать Object после слияния ветвей.
+                        String t = friendly(val.getType());
+                        if (!isObjectType(t) || isObjectType(out[v.var])) out[v.var] = t;
                     }
                 }
             }
@@ -96,8 +108,166 @@ public final class TypeInference {
         // (иначе выходит "new double[this]", "iVar29 >= this").
         classifyPrimitiveStores(mn, out);
         refineBooleans(mn, out);
+        applyUsageBasedObjectTypes(mn, isStatic, out, hierarchy);
         return out;
     }
+
+    /**
+     * Usage-based вывод типа объектной локали: если слот остался {@code Object},
+     * но используется как получатель члена ({@code INVOKEVIRTUAL/INVOKEINTERFACE}
+     * или {@code GETFIELD}), его реальный класс — как минимум класс-владелец
+     * этого члена. Такая замена делает вызов компилируемым, тогда как
+     * {@code Object} — нет.
+     *
+     * <p>Голоса собираются по кадрам {@link SlotTrackingInterpreter}: значение,
+     * загруженное {@code ALOAD n}, несёт номер слота; на вызове/чтении поля
+     * смотрим получателя на стеке. Из нескольких владельцев выбирается тот, под
+     * который подходит больше всего голосов (наследник покрывает методы предка).
+     */
+    private static void applyUsageBasedObjectTypes(MethodNode mn, boolean isStatic, String[] types,
+                                                   ClassHierarchy hierarchy) {
+        if (mn == null || mn.instructions == null || types == null) return;
+        int paramSlots = isStatic ? 0 : 1;
+        for (Type t : Type.getArgumentTypes(mn.desc)) paramSlots += t.getSize();
+
+        Map<Integer, Map<String, Integer>> votes = collectOwnerVotes(mn);
+        if (votes.isEmpty()) return;
+        for (Map.Entry<Integer, Map<String, Integer>> e : votes.entrySet()) {
+            int slot = e.getKey();
+            if (slot < paramSlots || slot >= types.length) continue;
+            if (!isObjectType(types[slot])) continue; // уже есть точный тип — не трогаем
+            String owner = pickBestOwner(e.getValue(), hierarchy);
+            if (owner != null) types[slot] = friendlyOwner(owner);
+        }
+    }
+
+    /** Карта «слот -> (класс-владелец члена -> число использований)». */
+    private static Map<Integer, Map<String, Integer>> collectOwnerVotes(MethodNode mn) {
+        Map<Integer, Map<String, Integer>> votes = new HashMap<>();
+        Frame<BasicValue>[] frames = tryAnalyze(mn, new SlotTrackingInterpreter());
+        if (frames == null) return votes;
+        AbstractInsnNode[] insns = mn.instructions.toArray();
+        for (int i = 0; i < insns.length && i < frames.length; i++) {
+            Frame<BasicValue> f = frames[i];
+            if (f == null) continue;
+            AbstractInsnNode n = insns[i];
+            if (n.getOpcode() == Opcodes.INVOKEVIRTUAL || n.getOpcode() == Opcodes.INVOKEINTERFACE) {
+                MethodInsnNode m = (MethodInsnNode) n;
+                if ("<init>".equals(m.name)) continue;
+                vote(votes, f, f.getStackSize() - 1 - argumentCount(m.desc), m.owner);
+            } else if (n.getOpcode() == Opcodes.GETFIELD) {
+                vote(votes, f, f.getStackSize() - 1, ((FieldInsnNode) n).owner);
+            }
+        }
+        return votes;
+    }
+
+    private static void vote(Map<Integer, Map<String, Integer>> votes, Frame<BasicValue> f,
+                             int receiverIndex, String owner) {
+        if (owner == null || owner.isEmpty() || "java/lang/Object".equals(owner)) return;
+        if (BOXED.contains(owner)) return;
+        if (receiverIndex < 0 || receiverIndex >= f.getStackSize()) return;
+        BasicValue v = f.getStack(receiverIndex);
+        if (!(v instanceof SlotValue sv) || sv.slot < 0) return;
+        votes.computeIfAbsent(sv.slot, k -> new LinkedHashMap<>()).merge(owner, 1, Integer::sum);
+    }
+
+    /**
+     * Выбор типа слота по голосам. Кандидат «покрывает» владельца O, если он
+     * наследник O — тогда методы O доступны и на кандидате. Берём кандидата с
+     * наибольшим покрытием (при равенстве — с наибольшим числом собственных
+     * использований, затем первый встреченный).
+     */
+    private static String pickBestOwner(Map<String, Integer> votes, ClassHierarchy hierarchy) {
+        String best = null;
+        int bestScore = -1;
+        int bestOwn = -1;
+        for (Map.Entry<String, Integer> cand : votes.entrySet()) {
+            int score = 0;
+            for (Map.Entry<String, Integer> o : votes.entrySet()) {
+                if (assignable(o.getKey(), cand.getKey(), hierarchy)) score += o.getValue();
+            }
+            if (score > bestScore || (score == bestScore && cand.getValue() > bestOwn)) {
+                best = cand.getKey();
+                bestScore = score;
+                bestOwn = cand.getValue();
+            }
+        }
+        return best;
+    }
+
+    /** assignable ли {@code sub} к {@code sup}: сначала по jar, затем рефлексией (JDK/classpath). */
+    private static boolean assignable(String sup, String sub, ClassHierarchy hierarchy) {
+        if (sup.equals(sub) || "java/lang/Object".equals(sup)) return true;
+        if (hierarchy != null && hierarchy.isAssignable(sup, sub)) return true;
+        try {
+            Class<?> supClass = loadClass(sup);
+            Class<?> subClass = loadClass(sub);
+            return supClass != null && subClass != null && supClass.isAssignableFrom(subClass);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static Class<?> loadClass(String internalName) {
+        try {
+            return Class.forName(internalName.replace('/', '.'), false, TypeInference.class.getClassLoader());
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private static String friendlyOwner(String owner) {
+        return owner.startsWith("[") ? Ast.friendlyType(owner) : Ast.friendlyType("L" + owner + ";");
+    }
+
+    private static boolean isObjectType(String t) {
+        return "Object".equals(t) || "java.lang.Object".equals(t);
+    }
+
+    /**
+     * Число значений-аргументов метода. В кадрах ASM {@code long}/{@code double}
+     * занимают ОДНУ позицию стека (в отличие от слотов JVM), поэтому считаем типы,
+     * а не размеры.
+     */
+    private static int argumentCount(String desc) {
+        return Type.getArgumentTypes(desc).length;
+    }
+
+    /**
+     * Значение с известным источником — загружено из слота {@code slot}. Позволяет
+     * на вызове/чтении поля узнать, какой локальный слот стоит получателем.
+     */
+    private static final class SlotValue extends BasicValue {
+        private final int slot;
+
+        SlotValue(Type type, int slot) {
+            super(type);
+            this.slot = slot;
+        }
+    }
+
+    /** BasicInterpreter, помечающий результаты {@code *LOAD} номером слота. */
+    private static final class SlotTrackingInterpreter extends BasicInterpreter {
+        SlotTrackingInterpreter() {
+            super(Opcodes.ASM9);
+        }
+
+        @Override
+        public BasicValue copyOperation(AbstractInsnNode insn, BasicValue value) throws AnalyzerException {
+            BasicValue base = super.copyOperation(insn, value);
+            int op = insn.getOpcode();
+            if (op >= Opcodes.ILOAD && op <= Opcodes.ALOAD) {
+                return new SlotValue(base == null ? null : base.getType(), ((VarInsnNode) insn).var);
+            }
+            return base;
+        }
+    }
+
+    /** Обёртки примитивов: объявлять их типом локали вредно (boxing и префикс имени). */
+    private static final Set<String> BOXED = Set.of(
+            "java/lang/Boolean", "java/lang/Byte", "java/lang/Character", "java/lang/Short",
+            "java/lang/Integer", "java/lang/Long", "java/lang/Float", "java/lang/Double");
 
     /**
      * Грубая классификация типов локальных по STORE-опкоду. Не требует кадров и

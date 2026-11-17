@@ -1,84 +1,73 @@
-# Следующая сессия: типы локальных (slotTypes → usage-based)
+# Следующая сессия: record→commit для fold, javac-гейт + фикстуры, затем entry-stack
 
-Статус на конец сессии: всё закоммичено, дерево чистое. Последний коммит —
-`5a3b064` (Java-каст `((Type)x)`). Перед началом работы: `git log --oneline -1`,
-`git status`.
+Статус: F1–F5 закрыты. Condition-prelude over-bail снят; PUTFIELD/PUTSTATIC больше
+не теряют получателя; категории стека учитываются; const-fold не исполняет мёртвую
+ветвь; rethrow-liveness консервативен по всему методу.
 
-## Что уже сделано в эмиттере (для контекста)
+## F1–F5: что сделано
 
-- `GETFIELD` (корень `>= this`), `ATHROW`-примитив, мёртвый код после return/throw,
-  boolean `return false/true`, `super()/this()`, склейка `new+init`, dead-store
-  (`iVar=const`), `ARETURN`→`null`, `invokedynamic` (StringConcat/Lambda/ObjectMethods),
-  `extends Enum/Record`, объявление локальных (`Ast.VarDecl`), Java-каст `Ast.Cast`.
-- Чекер: `THIS_INDEX`/`CMP_THIS` без фолс-позитивов; `--ast` даёт сводку в stderr.
-- Тест-джарки на рабочем столе: `slash-obf-bytecode.jar`, `slash-obf-bytecode-renamed.jar`,
-  `slash-obf-legit.jar` (все ~224 класса). Чистая сборка: `D:\sadnes\build\libs\slashvisuals-1.0-SNAPSHOT.jar`.
+- F1. Убран false bail `condition prelude` в IF_ELSE: prelude уже эмитится
+  BLOCK-узлом до IF_ELSE. Loop-header prelude и switch-key prelude оставлены —
+  там BLOCK-узла нет и prelude реально теряется.
+- F2. PUTFIELD: получатель — реальный (`oVar3.x = 1`), а не всегда `this.x`.
+  В выводе 10 таких присваиваний. PUTSTATIC тоже добавлен (class.field = v).
+- F3. DUP2/POP2/DUP_X2/DUP_X1 категорийные: cat-2 (long/double) — один слот,
+  cat-1 — два; не доказали категорию — bail (`DUP2 category` и т.п.).
+- F4. Const-fold эмитит только живую ветвь; мёртвый else с сайд-эффектами больше
+  не исполняется.
+- F5. `slotReadAnywhere`: слот rethrow'а проверяется по всему методу, а не линейно
+  после ATHROW (block-shuffle safe).
 
-## Задача следующей сессии: точность типов объектных локальных
+## Baseline `slash-obf-legit.jar` (F1–F5)
 
-### Как сейчас выводится тип (`decompiler/ast/TypeInference.java`)
+`undecompilable = 455` из 1942 методов (23.4%), survived = 1487.
 
-1. Параметры и `this` — точно из дескриптора метода.
-2. Локали — тип из кадров `BasicVerifier` в точке `store` (точно для объектов),
-   при падении анализа — фолбэк `BasicInterpreter`.
-3. Примитивы — по STORE-опкоду (`ISTORE→int`, `FSTORE→float`, `DSTORE→double`,
-   `LSTORE→long`), но берётся **последний** store (нет слияния по ветвям).
-4. `boolean` — эвристика (`refineBooleans`: только литералы 0/1 и только в `IFEQ/IFNE`).
-5. Дефолт для всего остального — `"Object"`.
+| Причина | Кол-во |
+|---|---|
+| underflow | 210 (206 generic + 2 DUP_X1 + 1 DUP2 + 1 DUP_X2) |
+| lost block | 25 |
+| double emit | 2 |
+| dead code | 5 |
+| missing return | 4 |
+| other | 209 |
+| — cmp opcode | 162 |
+| — multi-block try range | 27 |
+| — switch key prelude | 11 |
+| — multiple handlers | 9 |
+| join depth / irreducible | 0 |
 
-### Замер на `slash-obf-legit.jar` (224 класса)
+`class-level errors: 0`, `return 0: 8`, `rethrow-dropped=745`, `empty-roots=0`,
+`handler-dups=0`. На `bytecode`/`-renamed` — те же 455 и 0.
 
-- объявлений локальных ~1823 (регекс иногда ловит `return iVarN;` — это не объявления);
-- из них **656 = `java.lang.Object`** (фолбэк ~34%);
-- примитивы точные: `float` 639, `int` 388, `double` 104, `boolean` 23;
-- конкретные объектные классы — единицы (`Vec3d`, `CallbackInfo`, несколько `I…$…`).
+**Арифметика F1.** Сняли 271 ложный bail → 581 − 271 = 310. Из этих 271 метода
+126 выжили, а 145 вскрыли настоящие дыры (underflow +88, cmp +31, multi-block +9,
+multiple handlers +4, lost block +7, missing return +3, double emit +2, switch +1):
+310 + 145 = 455. То есть 271 не были «тихой потерей» — они были ложным bail'ом, а
+их реальные дефекты теперь видны.
 
-### Проблема
+**Double emit 2** (`_Pk(...)V`, `WWq(...)V`) — подозрение на F4: ветви
+конвертируются обе, счётчики мёртвой ветви не откатываются (record→commit для fold
+не сделан). Инвариант ловит, тихой неверности нет; следующий шаг — откат счётчиков
+мёртвой ветви с учётом join.
 
-**527 вызовов `oVarN.method(`, из них 515 — методы вне `Object`.** То есть
-`Object`-локали используются с методами своего реального класса → в текущем виде
-этот код **не компилируется**. Причина: `BasicVerifier` на де-флаттенинг-мешанине
-не строит кадры → фолбэк → `Object` (неверно).
+## Очередь
 
-### Предлагаемый фикс — usage-based вывод типа объекта
+1. **Record→commit для const-fold**: откатывать normalEmits/catchEmits мёртвой
+   ветви и не терять join; снять 2 double emit, не превратив их в ложные LOST_BLOCK.
+2. **javac-гейт** (ин-процессный JavaCompiler; фильтр `cant.resolve`/`doesnt.exist`;
+   категории missing return / unreachable / definite assignment; идемпотентность).
+3. **ASM-фикстуры**: opaque-true ромб с сайд-эффектом в else; PUTFIELD на локале;
+   cat-2 DUP2; nested try в handler'е; loop-header entry; switch fallthrough.
+4. **Дизайн-нота entry-stack** (сигнатура, fixpoint, unify, JOIN_DEPTH, phi→temp,
+   Ternary только JLS 15.25) → ревью → код.
+5. Entry-stack + join-depth; затем регионы вместо `switchConsumed`; затем rate-гейт.
 
-Идея: тип объектной локали брать из её использования как получателя:
-
-- эмиттер (`BytecodeToExpr`) при `INVOKEVIRTUAL/INVOKEINTERFACE/GETFIELD owner.name`
-  уже знает `owner` (класс метода/поля);
-- запоминать «слот N использован как получатель члена из класса `owner`»;
-- при объявлении локали брать самый специфичный `owner` (или наиболее частый) как тип;
-- при конфликте нескольких owners — общий супертип (можно `Object` только тогда).
-
-Куда встраивать:
-- `BytecodeToExpr`: при формировании вызова/доступа собирать `slot → owner`
-  (слот получателя — из `VarInsnNode`/`ALOAD` перед вызовом; либо из `Ast.Var` имени,
-  где имя = `oVarN` → N это слот).
-- Прокинуть собранную карту в `StructureToAst` (через `newEmu()`/сеттер), а оттуда —
-  в объявления локалей (`convert` уже собирает `locals` из AST; взять тип из карты,
-  если `slotTypes[slot]` = `Object`).
-
-### Ограничения/риски
-
-- Слот может переиспользоваться под разные классы в разных ветвях — брать общий супертип
-  по иерархии (`ClassHierarchy` уже есть в проекте).
-- Замена `Object` на конкретный класс может конфликтовать с реальным использованием,
-  если owner — интерфейс/суперкласс. Тогда лучше `owner` (компилируется по крайней мере
-  для вызова этого метода), а не `Object`.
-
-### Быстрый рецепт проверки прогресса
+## Проверка
 
 ```
-# сборка
 $env:JAVA_HOME='C:\Program Files\Java\jdk-21.0.12'; .\gradlew.bat --console=plain classes
-# прогон
-java -cp "build\classes\java\main;<asm 9.10.1 jars>" decompiler.cli.Main "C:\Users\User\Desktop\slash-obf-legit.jar" --ast 1>s0-out.txt 2>s0-err.txt
+java -cp "build\classes\java\main;<asm 9.7.1>" decompiler.cli.Main "C:\Users\User\Desktop\slash-obf-legit.jar" --ast 1>s-out.txt 2>s-err.txt
 ```
-Метрики цели: `java.lang.Object`-объявлений ↓, вызовов `oVar.method` вне `Object` ↓,
-ошибок классов = 0. Считать:
-```
-# Object-объявлений
-[regex]::Matches($t,'(?m)^\s+java\.lang\.Object\s+[iofd]Var\d+\s*;').Count
-# вызовов oVar.method( вне Object
-```
-(готовые однострочники — в истории чата этой сессии).
+
+Тест-джарки: `slash-obf-legit.jar`, `slash-obf-bytecode.jar`,
+`slash-obf-bytecode-renamed.jar`; `slashW.jar` — отдельный baseline после гейта.

@@ -132,7 +132,7 @@ public final class Main {
                 System.err.printf("Exported %d class(es) (errors=%d) to %s%n", res.classes, res.errors, res.outDir);
             } else if (astMode) {
                 int n = runAst(jar, decryptor, hierarchy);
-                System.err.printf("Java AST generated for %d method(s) from %s%n", n, jar);
+                System.err.printf("Java AST generated for %d class(es) from %s%n", n, jar);
             } else if (structureMode) {
                 int n = runStructure(jar);
                 System.err.printf("Structures recovered for %d method(s) from %s%n", n, jar);
@@ -260,12 +260,23 @@ public final class Main {
 
     /** Генерация Java-кода: печать полного класса (поля + методы через пайплайн). */
     private static int runAst(Path jar, StringDecryptor decryptor, ClassHierarchy hierarchy) throws Exception {
-        final int[] methods = {0};
+        final int[] classes = {0};
+        final int[] classErrors = {0};
+        final int[] methodsWithCode = {0};
+        // Сброс диагностики прогона (статическая, чтобы не тащить счётчики через API).
+        decompiler.ast.StructureToAst.HANDLER_DUPLICATES.set(0);
+        decompiler.ast.StructureToAst.EMPTY_ROOTS.set(0);
+        decompiler.ast.StructureToAst.PRUNED_STATEMENTS.set(0);
+        decompiler.ast.StructureToAst.PRUNED_METHODS.set(0);
+        decompiler.ast.StructureToAst.RETHROW_DROPPED.set(0);
         // Чекер качества агрегирует маркеры по всем классам и печатает отчёт в stderr.
         final QualityChecker.Report q = new QualityChecker.Report();
         final int[] siteBudget = {8}; // печатаем места >= this только для первых N классов
         JarParser.parse(jar, (p, entry, node) -> {
             ClassNode cn = node;
+            for (MethodNode m : cn.methods) {
+                if (m.instructions != null && m.instructions.size() > 0) methodsWithCode[0]++;
+            }
             String internal = entry.endsWith(".class")
                     ? entry.substring(0, entry.length() - 6) : entry;
             String display = decompiler.ast.ClassRenamer.renameInternal(internal);
@@ -278,14 +289,25 @@ public final class Main {
                 if (!rep.cmpThisSites.isEmpty() && siteBudget[0]-- > 0) rep.printCmpThisSites();
                 q.merge(rep);
             } catch (Exception ex) {
+                classErrors[0]++;
                 StackTraceElement at = ex.getStackTrace().length > 0 ? ex.getStackTrace()[0] : null;
                 System.out.println("  // class: " + ex + (at != null ? "  @ " + at : ""));
             }
             System.out.println();
-            methods[0]++;
+            classes[0]++;
         });
+        q.classErrors = classErrors[0];
         System.err.println(q.summary());
-        return methods[0];
+        System.err.println(String.format("methods: total=%d survived=%d undecompilable=%d",
+                methodsWithCode[0], methodsWithCode[0] - q.undecompilable, q.undecompilable));
+        System.err.println(String.format(
+                "diag: empty-roots=%d handler-dups=%d rethrow-dropped=%d pruned-stmts=%d pruned-methods=%d",
+                decompiler.ast.StructureToAst.EMPTY_ROOTS.get(),
+                decompiler.ast.StructureToAst.HANDLER_DUPLICATES.get(),
+                decompiler.ast.StructureToAst.RETHROW_DROPPED.get(),
+                decompiler.ast.StructureToAst.PRUNED_STATEMENTS.get(),
+                decompiler.ast.StructureToAst.PRUNED_METHODS.get()));
+        return classes[0];
     }
 
     private static void dumpEdges(CffUnflattenerPass.Result res) {

@@ -100,6 +100,16 @@ public final class CfgBuilder {
             // обычная инструкция: блок продолжается, следующая НЕ становится лидером
         }
 
+        // Метки handler'ов — обязательные границы блоков: иначе catch-блок
+        // слипается с блоком, содержащим настоящий return, и при подавлении
+        // пустого try теряется вместе с ним (молча потерянный return).
+        if (mn.tryCatchBlocks != null) {
+            for (org.objectweb.asm.tree.TryCatchBlockNode tcb : mn.tryCatchBlocks) {
+                int hi = indexOfLabel(all, tcb.handler);
+                if (hi >= 0) leader[hi] = true;
+            }
+        }
+
         // --- 2. границы блоков (лидеры -> [from, to)) ---
         List<Integer> leaderIdx = new ArrayList<>();
         for (int i = 0; i < n; i++) {
@@ -160,6 +170,12 @@ public final class CfgBuilder {
                 }
                 addSuccessor(blocks.get(b), dflt);
                 blocks.get(b).linkLabel(ls.dflt, dflt);
+            } else if (op == Opcodes.IRETURN || op == Opcodes.LRETURN || op == Opcodes.FRETURN
+                    || op == Opcodes.DRETURN || op == Opcodes.ARETURN || op == Opcodes.RETURN
+                    || op == Opcodes.ATHROW) {
+                // return/athrow завершают поток: преемников нет. Иначе физически
+                // следующий блок (например handler) получает ложное fallthrough-ребро
+                // и «становится достижимым» по нормальному пути.
             } else {
                 // не-терминатор блока (lastIdx не переход): падение
                 addFallthrough(blocks, b, lastIdx, blockOf);

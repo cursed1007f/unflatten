@@ -134,7 +134,7 @@ public final class JavaClassPrinter {
         }
         var rec = StructureRecoverer.forGraph(blocks, entry);
         var root = rec.build(entry);
-        var ast = new StructureToAst(blocks, mn, cffDispatch, decryptor, classOwner, hierarchy).convert(root);
+        var ast = new StructureToAst(blocks, mn, cffDispatch, decryptor, classOwner, hierarchy, entry).convert(root);
         // печатаем с отступами (4 пробела базово)
         String body = JavaPrinter.print(ast);
         return indent(body, 8);

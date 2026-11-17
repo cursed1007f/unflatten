@@ -41,6 +41,38 @@ public final class StructureToAst {
     private final ClassHierarchy hierarchy;
     private final SlotZeroResolver slotZero;
     private final String classOwner; // внутреннее имя текущего класса (для super()/this())
+    /** Точка входа CFG: от неё считается reachability (а не от корней). */
+    private final int entryIndex;
+
+    /** Метод не удалось восстановить корректно — вывод заменён raw-маркером. */
+    private boolean undecompilable;
+    private String undecompilableReason;
+    /** Эмиссии блоков по роли: normal-flow и catch-роль (handler). */
+    private final java.util.Map<Integer, Integer> normalEmits = new java.util.HashMap<>();
+    private final java.util.Map<Integer, Integer> catchEmits = new java.util.HashMap<>();
+
+    /** Диагностика прогона (сбрасывается Main). */
+    public static final java.util.concurrent.atomic.AtomicInteger HANDLER_DUPLICATES =
+            new java.util.concurrent.atomic.AtomicInteger();
+    public static final java.util.concurrent.atomic.AtomicInteger EMPTY_ROOTS =
+            new java.util.concurrent.atomic.AtomicInteger();
+    public static final java.util.concurrent.atomic.AtomicInteger PRUNED_STATEMENTS =
+            new java.util.concurrent.atomic.AtomicInteger();
+    public static final java.util.concurrent.atomic.AtomicInteger PRUNED_METHODS =
+            new java.util.concurrent.atomic.AtomicInteger();
+    public static final java.util.concurrent.atomic.AtomicInteger RETHROW_DROPPED =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+    /** Handler'ы, легально снятые (пустой try / чистый rethrow), с причиной. */
+    private final java.util.Set<Integer> droppedHandlers = new java.util.HashSet<>();
+    /** Литералы, созданные эмиттерами из байткода/свёрток (provenance-реестр). */
+    private final java.util.Set<Ast.Expr> sourcedLiterals =
+            java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+
+    private Ast.Literal sourced(Ast.Literal l) {
+        sourcedLiterals.add(l);
+        return l;
+    }
 
     /** Р’С‹С‡РёСЃР»СЏРµС‚ РјР°РїРїРёРЅРі LabelNode -> РёРЅРґРµРєСЃ Р±Р»РѕРєР°. РњРµС‚РєР° РјРѕР¶РµС‚ Р±С‹С‚СЊ РІ Р»СЋР±РѕР№
      *  РїРѕР·РёС†РёРё Р±Р»РѕРєР° (РЅРµ С‚РѕР»СЊРєРѕ РїРµСЂРІРѕР№), С‚.Рє. try-range С‡Р°СЃС‚Рѕ РЅР°С‡РёРЅР°РµС‚СЃСЏ РІРЅСѓС‚СЂРё. */
@@ -76,6 +108,14 @@ public final class StructureToAst {
 
     public StructureToAst(List<BasicBlock> blocks, MethodNode method, java.util.Set<Integer> cffDispatch,
                           StringDecryptor decryptor, String classOwner, ClassHierarchy hierarchy) {
+        this(blocks, method, cffDispatch, decryptor, classOwner, hierarchy,
+                blocks.isEmpty() ? -1 : blocks.get(0).index());
+    }
+
+    public StructureToAst(List<BasicBlock> blocks, MethodNode method, java.util.Set<Integer> cffDispatch,
+                          StringDecryptor decryptor, String classOwner, ClassHierarchy hierarchy,
+                          int entryIndex) {
+        this.entryIndex = entryIndex;
         this.blocks = blocks;
         this.method = method;
         this.isStatic = (method.access & Opcodes.ACC_STATIC) != 0;
@@ -85,6 +125,16 @@ public final class StructureToAst {
         this.cffDispatch = cffDispatch;
         this.tryCatch = method.tryCatchBlocks != null ? method.tryCatchBlocks : java.util.List.of();
         this.labelToBlock = buildLabelMap(blocks);
+        // Диагностика: если корней нет (entry — заголовок цикла с back-edge),
+        // старый reachability от корней был пустым и инварианты ничего не проверяли.
+        boolean hasRoot = false;
+        for (BasicBlock b : blocks) {
+            if (b.getPredecessors().isEmpty()) {
+                hasRoot = true;
+                break;
+            }
+        }
+        if (!hasRoot) EMPTY_ROOTS.incrementAndGet();
         this.decryptor = decryptor;
         this.hierarchy = hierarchy;
         this.classOwner = classOwner;
@@ -95,15 +145,406 @@ public final class StructureToAst {
 
     /** Р“Р»Р°РІРЅР°СЏ С‚РѕС‡РєР° РІС…РѕРґР°. */
     public List<Ast.Stmt> convert(StructureNode root) {
+        try {
+            return convertBody(root);
+        } catch (UndecompilableException e) {
+            // Явный отказ вместо тихо неверного кода: метод помечается
+            // undecompilable, в тело пишется raw-маркер (без выдуманных значений).
+            this.undecompilable = true;
+            this.undecompilableReason = e.getMessage();
+            return fallbackBody();
+        }
+    }
+
+    /** Метод не удалось восстановить корректно (стек/граф вышли за модель). */
+    public boolean isUndecompilable() {
+        return undecompilable;
+    }
+
+    public String undecompilableReason() {
+        return undecompilableReason;
+    }
+
+    /** Fallback-тело: raw-маркер и громкий throw для любого типа возврата. */
+    private List<Ast.Stmt> fallbackBody() {
+        List<Ast.Stmt> out = new ArrayList<>();
+        String reason = undecompilableReason == null ? "other" : undecompilableReason;
+        out.add(new Ast.Raw("// undecompilable: " + reason + " @ " + method.name + method.desc));
+        // Громко и одинаково для void/non-void: тело не притворяется рабочим.
+        // В <init> javac сам вставит super() перед первым оператором, в <clinit>
+        // это даст ExceptionInInitializerError (учитывается в отчёте).
+        out.add(new Ast.ExprStmt(new Ast.Call(null, "throw",
+                List.of(new Ast.NewObject("Ljava/lang/UnsupportedOperationException;",
+                        List.of(new Ast.Literal("undecompilable")))), false)));
+        return out;
+    }
+
+    /**
+     * Hard invariant: emitted ⊇ reachable — ни один достижимый блок не потерян —
+     * и ровно одна эмиссия для блоков с сайд-эффектами. Потерянный блок может
+     * нести return/throw/вызов/запись, то есть давать молча неверный код;
+     * двойная эмиссия — тот же баг с другой стороны.
+     */
+    private void verifyEmittedBlocks() {
+        java.util.Set<Integer> reachable = reachableBlocks();
+        for (BasicBlock b : blocks) {
+            int idx = b.index();
+            int normal = normalEmits.getOrDefault(idx, 0);
+            int catchCnt = catchEmits.getOrDefault(idx, 0);
+            if (catchCnt > 1) HANDLER_DUPLICATES.addAndGet(catchCnt - 1);
+            if (!reachable.contains(idx)) continue;
+            if (normal == 0) {
+                // Достижимый normal-flow блок не эмитирован нормально: либо потерян,
+                // либо (дыра обфускатора) в него прыгают normal-flow'ом в handler —
+                // тогда одного catch-эмита недостаточно.
+                throw new UndecompilableException(
+                        UndecompilableException.Kind.LOST_BLOCK, "BB" + idx);
+            }
+            if (normal > 1 && hasSideEffect(b)) {
+                throw new UndecompilableException(
+                        UndecompilableException.Kind.DOUBLE_EMIT, "BB" + idx);
+            }
+        }
+    }
+
+    /** Блоки-handler'ы: дублирование catch-кода легально и безопасно. */
+
+    /** Есть ли в блоке наблюдаемый сайд-эффект (вызов, запись, монитор, throw). */
+    private static boolean hasSideEffect(BasicBlock b) {
+        for (AbstractInsnNode n : b.getInstructions()) {
+            switch (n.getOpcode()) {
+                case Opcodes.INVOKEVIRTUAL, Opcodes.INVOKESPECIAL, Opcodes.INVOKESTATIC,
+                     Opcodes.INVOKEINTERFACE, Opcodes.INVOKEDYNAMIC,
+                     Opcodes.PUTFIELD, Opcodes.PUTSTATIC,
+                     Opcodes.IASTORE, Opcodes.LASTORE, Opcodes.FASTORE, Opcodes.DASTORE,
+                     Opcodes.AASTORE, Opcodes.BASTORE, Opcodes.CASTORE, Opcodes.SASTORE,
+                     Opcodes.MONITORENTER, Opcodes.MONITOREXIT,
+                     Opcodes.NEW, Opcodes.NEWARRAY, Opcodes.ANEWARRAY, Opcodes.MULTIANEWARRAY,
+                     Opcodes.ATHROW -> {
+                    return true;
+                }
+                default -> {
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Hard invariant (non-void): из entry нет пути к «выходу без значения».
+     * Ловит missing return statement до javac.
+     */
+    private void verifyAllPathsTerminate() {
+        String ret = method.desc.substring(method.desc.indexOf(')') + 1);
+        if ("V".equals(ret)) return;
+        for (int idx : reachableBlocks()) {
+            BasicBlock b = blocks.get(idx);
+            if (b.getSuccessors().isEmpty() && !terminatesExecution(b)) {
+                throw new UndecompilableException(
+                        UndecompilableException.Kind.MISSING_RETURN, "BB" + idx);
+            }
+        }
+    }
+
+    private static boolean terminatesExecution(BasicBlock b) {
+        AbstractInsnNode term = b.getTerminator();
+        if (term == null) return false;
+        int op = term.getOpcode();
+        return (op >= Opcodes.IRETURN && op <= Opcodes.RETURN) || op == Opcodes.ATHROW;
+    }
+
+    /**
+     * DCE: обрезает список после первого return/throw, рекурсивно по вложенным.
+     * Режем только чистые хвосты (присваивания локалям, чистые выражения). Хвост
+     * с сайд-эффектом — DEAD_CODE bail: если структура криво линеаризовала
+     * достижимый код, тихое удаление было бы laundering'ом.
+     */
+    private void pruneDeadStatements(List<Ast.Stmt> stmts) {
+        if (stmts == null) return;
+        for (int i = 0; i < stmts.size(); i++) {
+            Ast.Stmt s = stmts.get(i);
+            if (s instanceof Ast.If f) {
+                pruneDeadStatements(f.thenBranch());
+                pruneDeadStatements(f.elseBranch());
+            } else if (s instanceof Ast.While w) {
+                pruneDeadStatements(w.body());
+            } else if (s instanceof Ast.Switch sw) {
+                for (Ast.Case c : sw.cases()) pruneDeadStatements(c.body());
+                pruneDeadStatements(sw.defaultBranch());
+            } else if (s instanceof Ast.TryCatch tc) {
+                pruneDeadStatements(tc.tryBody());
+                pruneDeadStatements(tc.catchBody());
+            } else if (s instanceof Ast.Block b) {
+                pruneDeadStatements(b.body());
+            }
+            if (isTerminator(s) && i + 1 < stmts.size()) {
+                // «Чистый» не значит «мёртвый»: return x; x = 2; при уже
+                // инициализированном x меняет результат. CFG-доказуемости для
+                // хвоста нет — значит это bail, а не DCE.
+                throw new UndecompilableException(
+                        UndecompilableException.Kind.DEAD_CODE, "tail after terminator");
+            }
+        }
+    }
+
+    /** Чистый (без сайд-эффектов и без бросающих операций) оператор. */
+    private static boolean isClean(Ast.Stmt s) {
+        if (s instanceof Ast.VarDecl) return true;
+        if (s instanceof Ast.Return r) return isPureExpr(r.value());
+        if (s instanceof Ast.Assign a) {
+            return isLocalName(a.target().name()) && isPureExpr(a.value());
+        }
+        if (s instanceof Ast.ExprStmt es) return isPureExpr(es.expr());
+        return false;
+    }
+
+    private static boolean isLocalName(String n) {
+        return n != null && n.matches("([iofd]Var\\d+|p\\d+)");
+    }
+
+    /** Выражение без вызовов/аллокаций/полей/кастов деления (не бросает и не пишет). */
+    private static boolean isPureExpr(Ast.Expr e) {
+        if (e == null || e instanceof Ast.Literal || e instanceof Ast.NullLit || e instanceof Ast.Var) {
+            return true;
+        }
+        if (e instanceof Ast.Unary u) {
+            // конверсии (long)/(int)/... — чистые; "!"/"-"/"~" — тоже
+            return isPureExpr(u.operand());
+        }
+        if (e instanceof Ast.Binary b) {
+            if ("/".equals(b.op()) || "%".equals(b.op())) return false;
+            return isPureExpr(b.left()) && isPureExpr(b.right());
+        }
+        return false;
+    }
+
+    /** Hard invariant: в одном списке операторов нет кода после return/throw. */
+    private static void verifyNoDeadStatements(List<Ast.Stmt> stmts) {
+        if (stmts == null) return;
+        boolean terminated = false;
+        for (Ast.Stmt s : stmts) {
+            if (terminated) {
+                throw new UndecompilableException(
+                        UndecompilableException.Kind.DEAD_CODE, "statement after terminator");
+            }
+            if (s instanceof Ast.If i) {
+                verifyNoDeadStatements(i.thenBranch());
+                verifyNoDeadStatements(i.elseBranch());
+            } else if (s instanceof Ast.While w) {
+                verifyNoDeadStatements(w.body());
+            } else if (s instanceof Ast.Switch sw) {
+                for (Ast.Case c : sw.cases()) verifyNoDeadStatements(c.body());
+                verifyNoDeadStatements(sw.defaultBranch());
+            } else if (s instanceof Ast.TryCatch tc) {
+                verifyNoDeadStatements(tc.tryBody());
+                verifyNoDeadStatements(tc.catchBody());
+            } else if (s instanceof Ast.Block b) {
+                verifyNoDeadStatements(b.body());
+            }
+            terminated = isTerminator(s);
+        }
+    }
+
+    /**
+     * Hard invariant provenance: каждый литерал в выхлопе создан эмиттером из
+     * байткодной инструкции или свёртки констант. Литерал вне реестра = скрытая
+     * фабрикация (0/null «из воздуха») — метод помечается undecompilable.
+     */
+    private void verifyLiteralProvenance(List<Ast.Stmt> stmts) {
+        checkProvenance(stmts);
+    }
+
+    private void checkProvenance(List<Ast.Stmt> stmts) {
+        if (stmts == null) return;
+        for (Ast.Stmt s : stmts) {
+            if (s instanceof Ast.Return r) {
+                checkProvenance(r.value());
+            } else if (s instanceof Ast.Assign a) {
+                checkProvenance(a.target());
+                checkProvenance(a.value());
+            } else if (s instanceof Ast.ExprStmt es) {
+                checkProvenance(es.expr());
+            } else if (s instanceof Ast.If i) {
+                checkProvenance(i.cond());
+                checkProvenance(i.thenBranch());
+                checkProvenance(i.elseBranch());
+            } else if (s instanceof Ast.While w) {
+                checkProvenance(w.cond());
+                checkProvenance(w.body());
+            } else if (s instanceof Ast.Switch sw) {
+                checkProvenance(sw.key());
+                for (Ast.Case c : sw.cases()) checkProvenance(c.body());
+                checkProvenance(sw.defaultBranch());
+            } else if (s instanceof Ast.TryCatch tc) {
+                checkProvenance(tc.tryBody());
+                checkProvenance(tc.catchBody());
+            } else if (s instanceof Ast.Block b) {
+                checkProvenance(b.body());
+            }
+        }
+    }
+
+    private void checkProvenance(Ast.Expr e) {
+        if (e == null) return;
+        if (e instanceof Ast.NullLit n) {
+            if (!sourcedLiterals.contains(n)) {
+                throw new UndecompilableException(
+                        UndecompilableException.Kind.OTHER, "null without provenance");
+            }
+            return;
+        }
+        if (e instanceof Ast.Literal l) {
+            if (!sourcedLiterals.contains(l)) {
+                throw new UndecompilableException(
+                        UndecompilableException.Kind.OTHER, "literal without provenance");
+            }
+            return;
+        }
+        if (e instanceof Ast.Binary b) {
+            checkProvenance(b.left());
+            checkProvenance(b.right());
+        } else if (e instanceof Ast.Unary u) {
+            checkProvenance(u.operand());
+        } else if (e instanceof Ast.Cast c) {
+            checkProvenance(c.value());
+        } else if (e instanceof Ast.Call c) {
+            checkProvenance(c.target());
+            for (Ast.Expr a : c.args()) checkProvenance(a);
+        } else if (e instanceof Ast.Field f) {
+            checkProvenance(f.target());
+        } else if (e instanceof Ast.NewObject no) {
+            for (Ast.Expr a : no.args()) checkProvenance(a);
+        }
+    }
+
+    private static boolean isTerminator(Ast.Stmt s) {
+        if (s instanceof Ast.Return) return true;
+        return s instanceof Ast.ExprStmt es
+                && es.expr() instanceof Ast.Call c && "throw".equals(c.name());
+    }
+
+    /**
+     * Assert нового сплиттера: handler-метка обязана открывать блок (перед ней
+     * только метки/line/frame). Иначе catch-блок снова слипнется с кодом.
+     */
+    private void verifyHandlerBoundaries() {
+        for (var tcb : tryCatch) {
+            Integer hi = labelToBlock.get(tcb.handler);
+            if (hi == null || hi < 0 || hi >= blocks.size()) continue;
+            boolean seen = false;
+            boolean bad = false;
+            for (AbstractInsnNode n : blocks.get(hi).getInstructions()) {
+                if (n == tcb.handler) {
+                    seen = true;
+                    break;
+                }
+                if (n.getOpcode() >= 0) {
+                    bad = true;
+                    break;
+                }
+            }
+            if (!seen || bad) {
+                throw new UndecompilableException(
+                        UndecompilableException.Kind.OTHER, "handler label not a block start");
+            }
+        }
+    }
+
+    /** Достижимые от entry (а не от корней: entry может быть заголовком цикла). */
+    private java.util.Set<Integer> reachableBlocks() {
+        java.util.Set<Integer> seen = new java.util.HashSet<>();
+        java.util.ArrayDeque<Integer> queue = new java.util.ArrayDeque<>();
+        int start = (entryIndex >= 0 && entryIndex < blocks.size()) ? entryIndex : firstRoot();
+        if (start >= 0 && seen.add(start)) queue.add(start);
+        while (!queue.isEmpty()) {
+            BasicBlock b = blocks.get(queue.poll());
+            for (BasicBlock s : b.getSuccessors()) {
+                if (seen.add(s.index())) queue.add(s.index());
+            }
+        }
+        return seen;
+    }
+
+    private int firstRoot() {
+        for (BasicBlock b : blocks) {
+            if (b.getPredecessors().isEmpty()) return b.index();
+        }
+        return -1;
+    }
+
+    /**
+     * Reachability с exception-замыканием: CfgBuilder не строит exception-рёбра,
+     * поэтому handler'ы добавляем сами для достижимых try-start'ов (транзитивно —
+     * вложенный try внутри handler'а тоже попадает в замыкание).
+     */
+    private java.util.Set<Integer> reachableWithHandlers() {
+        java.util.Map<Integer, java.util.List<Integer>> startHandlers = new java.util.HashMap<>();
+        for (var tcb : tryCatch) {
+            Integer s = labelToBlock.get(tcb.start);
+            Integer h = labelToBlock.get(tcb.handler);
+            if (s != null && h != null) {
+                startHandlers.computeIfAbsent(s, k -> new ArrayList<>()).add(h);
+            }
+        }
+        java.util.Set<Integer> seen = new java.util.HashSet<>();
+        java.util.ArrayDeque<Integer> queue = new java.util.ArrayDeque<>();
+        int start = (entryIndex >= 0 && entryIndex < blocks.size()) ? entryIndex : firstRoot();
+        if (start >= 0 && seen.add(start)) queue.add(start);
+        while (!queue.isEmpty()) {
+            int idx = queue.poll();
+            BasicBlock b = blocks.get(idx);
+            for (BasicBlock s : b.getSuccessors()) {
+                if (seen.add(s.index())) queue.add(s.index());
+            }
+            for (int h : startHandlers.getOrDefault(idx, java.util.List.of())) {
+                if (seen.add(h)) queue.add(h);
+            }
+        }
+        return seen;
+    }
+
+    /**
+     * Hard invariant: у каждого достижимого try-start'а handler обязан быть
+     * покрыт — эмитирован как catch, легально снят (пустой try/чистый rethrow)
+     * или эмитирован нормально. Иначе catch-код исчез молча.
+     */
+    private void verifyHandlerCoverage() {
+        java.util.Set<Integer> reachable = reachableWithHandlers();
+        for (var tcb : tryCatch) {
+            Integer start = labelToBlock.get(tcb.start);
+            Integer handler = labelToBlock.get(tcb.handler);
+            if (start == null || handler == null) continue;
+            if (!reachable.contains(start)) continue;
+            if (catchEmits.containsKey(handler)) continue;
+            if (droppedHandlers.contains(handler)) continue;
+            if (normalEmits.getOrDefault(handler, 0) > 0) continue;
+            throw new UndecompilableException(
+                    UndecompilableException.Kind.LOST_BLOCK, "uncovered handler BB" + handler);
+        }
+    }
+
+    private List<Ast.Stmt> convertBody(StructureNode root) {
         List<Ast.Stmt> out = new ArrayList<>();
         convertNode(root, out);
+        verifyEmittedBlocks();
+        verifyHandlerCoverage();
+        verifyHandlerBoundaries();
+        verifyAllPathsTerminate();
         // Убираем мёртвые присваивания примитив-локалям (iVarN = const, нечитаемые).
         List<Ast.Stmt> res = DeadStores.eliminate(out);
+        // DCE: доказуемо недостижимый код после терминатора выкидываем, а не
+        // роняем метод (это не потеря значения, а мусор структуры).
+        pruneDeadStatements(res);
+        verifyNoDeadStatements(res);
+        verifyLiteralProvenance(res);
         // Гарантия валидного Java: non-void метод, в котором восстановитель структуры
         // потерял return (diamond-тернарники и т.п.), получает завершающий return <default>.
         String ret = method.desc.substring(method.desc.indexOf(')') + 1);
         if (!"V".equals(ret) && !containsReturn(res) && !endsWithThrow(res)) {
-            res.add(new Ast.Return(defaultValue(ret)));
+            // Раньше здесь фабриковался return 0/null. Теперь — явный отказ:
+            // литерал обязан иметь байткодный provenance.
+            throw new UndecompilableException(
+                    UndecompilableException.Kind.MISSING_RETURN, "no return emitted");
         }
         // Объявляем локальные переменные в начале метода (тип из slotTypes по слоту).
         java.util.Map<Integer, String> locals = new java.util.TreeMap<>();
@@ -207,18 +648,6 @@ public final class StructureToAst {
         return last instanceof Ast.ExprStmt es && es.expr() instanceof Ast.Call c && "throw".equals(c.name());
     }
 
-    private static Ast.Expr defaultValue(String ret) {
-        if (ret.isEmpty()) return new Ast.NullLit();
-        return switch (ret.charAt(0)) {
-            case 'Z' -> new Ast.Literal(false);
-            case 'B', 'C', 'S', 'I' -> new Ast.Literal(0);
-            case 'J' -> new Ast.Literal(0L);
-            case 'F' -> new Ast.Literal(0.0f);
-            case 'D' -> new Ast.Literal(0.0d);
-            default -> new Ast.NullLit();
-        };
-    }
-
     private void convertNode(StructureNode node, List<Ast.Stmt> out) {
         switch (node.kind()) {
             case SEQUENCE -> {
@@ -247,6 +676,11 @@ public final class StructureToAst {
                 int header = node.loopHeader();
                 java.util.Set<Integer> bodyIdx = new java.util.HashSet<>(node.loopBody());
                 Ast.Expr cond = loopCond(header, bodyIdx);
+                if (!lastCondStatements.isEmpty()) {
+                    throw new UndecompilableException(
+                            UndecompilableException.Kind.OTHER, "loop header prelude");
+                }
+                normalEmits.merge(header, 1, Integer::sum);
                 List<Ast.Stmt> body = new ArrayList<>();
                 for (StructureNode c : node.children()) {
                     if (outTerminated(body)) break; // недостижимые после return/throw узлы тела цикла
@@ -256,7 +690,7 @@ public final class StructureToAst {
                 // while (1*1+1%2 != 0) -> while(true); while(false) -> тело мёртвое, не эмитим.
                 Object cv = Ast.constValue(cond);
                 if (cv instanceof Boolean b) {
-                    if (b) out.add(new Ast.While(new Ast.Literal(true), body));
+                    if (b) out.add(new Ast.While(sourced(new Ast.Literal(true)), body));
                     // else: всегда-ложь — цикл не выполняется
                 } else {
                     out.add(new Ast.While(cond, body));
@@ -273,14 +707,9 @@ public final class StructureToAst {
                 // её после взятой ветви только если та не терминирует (return/throw).
                 Object cv = Ast.constValue(cond);
                 if (cv instanceof Boolean b) {
-                    if (b) {
-                        // терминирующую then-ветвь эмитим (вместе с её return),
-                        // а недостижимый else — нет (мёртвый код не выводим)
-                        out.addAll(thenSt);
-                        if (!elseSt.isEmpty() && !outTerminated(thenSt)) out.addAll(elseSt);
-                    } else {
-                        out.addAll(elseSt);
-                    }
+                    // Условие константно: живая ровно одна ветвь; мёртвую не эмитим
+                    // (иначе исполнятся её сайд-эффекты). Join — после if.
+                    out.addAll(b ? thenSt : elseSt);
                 } else {
                     out.add(new Ast.If(cond, thenSt, elseSt.isEmpty() ? null : elseSt));
                 }
@@ -305,38 +734,126 @@ public final class StructureToAst {
 
     /** Р•СЃР»Рё Р±Р»РѕРє вЂ” РЅР°С‡Р°Р»Рѕ try-range, СЃС‚СЂРѕРёС‚ Ast.TryCatch СЃ РїРµСЂРІС‹Рј catch'РµРј. */
     private Ast.Stmt tryBuildTryCatch(int blockIndex) {
-        // РЅР°Р№С‚Рё tryCatchBlock, С‡РµР№ start-Р±Р»РѕРє == СЌС‚РѕС‚ Р±Р»РѕРє
-        org.objectweb.asm.tree.TryCatchBlockNode match = null;
+        java.util.List<org.objectweb.asm.tree.TryCatchBlockNode> matches = new ArrayList<>();
         for (var tcb : tryCatch) {
             Integer startBlock = labelToBlock.get(tcb.start);
-            if (startBlock != null && startBlock == blockIndex) {
-                match = tcb;
-                break;
-            }
+            if (startBlock != null && startBlock == blockIndex) matches.add(tcb);
         }
-        if (match == null) return null;
+        if (matches.isEmpty()) return null;
+        if (matches.size() > 1) {
+            // Несколько handler'ов на один try (multi-catch/anti-tamper): модель
+            // Ast.TryCatch хранит один catch — не притворяемся, что покрыли все.
+            throw new UndecompilableException(
+                    UndecompilableException.Kind.OTHER, "multiple handlers at try start");
+        }
+        var match = matches.get(0);
 
-        // catch-Р±Р»РѕРє (handler)
+        // catch-блок (handler)
         Integer handlerBlock = labelToBlock.get(match.handler);
         if (handlerBlock == null) return null;
 
+        // Модель try-body = один стартовый блок. Многоблочный range она не
+        // покрывает: чистый rethrow-handler — пустая обёртка (снимаем), иначе
+        // честный отказ, пока нет регионов.
+        if (!rangeIsSingleBlock(blockIndex, match)) {
+            int rethrowSlot = rethrowSlot(handlerBlock);
+            // Снимаем обёртку только если ASTORE-слот после rethrow'а больше не
+            // читается (иначе внешний handler может зависеть от записи).
+            if (rethrowSlot == -2 || (rethrowSlot >= 0 && !slotReadAnywhere(rethrowSlot))) {
+                droppedHandlers.add(handlerBlock);
+                RETHROW_DROPPED.incrementAndGet();
+                switchConsumed.add(handlerBlock);
+                return null;
+            }
+            throw new UndecompilableException(
+                    UndecompilableException.Kind.OTHER, "multi-block try range");
+        }
+
         // try-body: С‚РµР»Рѕ РЅР°С€РµРіРѕ Р±Р»РѕРєР° + С‚РµР»Рѕ handler'Р° РєР°Рє catch
         // (СѓРїСЂРѕС‰С‘РЅРЅРѕ: try-body вЂ” С‚РµРєСѓС‰РёР№ Р±Р»РѕРє, catch вЂ” Р±Р»РѕРє handler'Р°)
-        List<Ast.Stmt> tryBody = blockToStmt(blockIndex);
+        List<Ast.Stmt> tryBody = blockToStmt(blockIndex, false);
         // Анти-тампер обфускатора: `try { } catch (Throwable e) { return <dead>; throw(0); }`
         // при ПУСТОМ try — весь конструкт мёртв (catch недостижим). Выкидываем его,
         // пометив handler потреблённым, чтобы он не напечатался отдельным блоком.
         if (tryBody.isEmpty()) {
+            droppedHandlers.add(handlerBlock);
             switchConsumed.add(handlerBlock);
             return null;
         }
-        List<Ast.Stmt> catchBody = handlerBlock < blocks.size() ? blockToStmt(handlerBlock) : new ArrayList<>();
+        // try-body реально попадёт в вывод — теперь эмиссию можно считать.
+        normalEmits.merge(blockIndex, 1, Integer::sum);
+        List<Ast.Stmt> catchBody = handlerBlock < blocks.size()
+                ? runHandlerBlock(handlerBlock) : new ArrayList<>();
         // РїРѕРјРµС‚РёС‚СЊ handler-Р±Р»РѕРє РїРѕС‚СЂРµР±Р»С‘РЅРЅС‹Рј, С‡С‚РѕР±С‹ РЅРµ РїРµС‡Р°С‚Р°Р»СЃСЏ РїРѕРІС‚РѕСЂРЅРѕ
         switchConsumed.add(handlerBlock);
 
         String type = match.type; // РјРѕР¶РµС‚ Р±С‹С‚СЊ null (finally) вЂ” РЅР° СЌС‚РѕРј СЌС‚Р°РїРµ РїСЂРѕСЃС‚Рѕ РґРµС„РѕР»С‚
         Ast.Var cv = new Ast.Var("e");
         return new Ast.TryCatch(tryBody, type, cv, catchBody);
+    }
+
+    /** Покрывает ли try-range ровно стартовый блок (end — на его границе). */
+    private boolean rangeIsSingleBlock(int blockIndex, org.objectweb.asm.tree.TryCatchBlockNode tcb) {
+        Integer endBlock = labelToBlock.get(tcb.end);
+        if (endBlock == null) return false;
+        if (endBlock == blockIndex) return true;
+        if (endBlock != blockIndex + 1) return false;
+        for (AbstractInsnNode n : blocks.get(endBlock).getInstructions()) {
+            if (n == tcb.end) return true;
+            if (n.getOpcode() >= 0) return false;
+        }
+        return false;
+    }
+
+    /**
+     * Handler — чистый rethrow: ATHROW (-2) или ASTORE v; ALOAD v; ATHROW (v >= 0).
+     * Любая другая форма — -1 (не снимаем).
+     */
+    private int rethrowSlot(int handlerBlock) {
+        if (handlerBlock < 0 || handlerBlock >= blocks.size()) return -1;
+        int state = 0;
+        int slot = -1;
+        for (AbstractInsnNode n : blocks.get(handlerBlock).getInstructions()) {
+            int op = n.getOpcode();
+            if (op < 0) continue;
+            if (state == 0) {
+                if (op == Opcodes.ATHROW) return -2;
+                if (op == Opcodes.ASTORE) {
+                    slot = ((org.objectweb.asm.tree.VarInsnNode) n).var;
+                    state = 1;
+                } else {
+                    return -1;
+                }
+            } else if (state == 1) {
+                if (op == Opcodes.ALOAD
+                        && ((org.objectweb.asm.tree.VarInsnNode) n).var == slot) {
+                    state = 2;
+                } else {
+                    return -1;
+                }
+            } else {
+                return op == Opcodes.ATHROW ? slot : -1;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Читается ли слот где-либо ещё в методе, кроме собственного ALOAD rethrow'а.
+     * Консервативно по всему методу: block-shuffle может положить внешний handler
+     * в байткоде раньше, и линейный скан «после athrow» его не увидит.
+     */
+    private boolean slotReadAnywhere(int slot) {
+        int reads = 0;
+        for (AbstractInsnNode n : method.instructions) {
+            int op = n.getOpcode();
+            if (op >= Opcodes.ILOAD && op <= Opcodes.ALOAD
+                    && ((org.objectweb.asm.tree.VarInsnNode) n).var == slot) {
+                reads++;
+            }
+        }
+        // один ALOAD — сам rethrow; больше — слот читается (в т.ч. внешним handler'ом)
+        return reads > 1;
     }
 
     /** Р•СЃР»Рё Р±Р»РѕРє РѕРєР°РЅС‡РёРІР°РµС‚СЃСЏ switch вЂ” СЃС‚СЂРѕРёС‚ Ast.Switch; РёРЅР°С‡Рµ null. */
@@ -373,6 +890,12 @@ public final class StructureToAst {
         var emu = newEmu();
         Ast.Expr key = emu.extractSwitchKey(bb.getInstructions());
         if (key == null) return null;
+        if (!emu.lastStatements().isEmpty()) {
+            throw new UndecompilableException(
+                    UndecompilableException.Kind.OTHER, "switch key prelude");
+        }
+        // Диспетчер эмитится как заголовок switch — учитываем как normal-эмиссию.
+        normalEmits.merge(blockIndex, 1, Integer::sum);
 
         // РїРѕРјРµС‚РёС‚СЊ case/default-Р±Р»РѕРєРё РєР°Рє РїРѕРіР»РѕС‰С‘РЅРЅС‹Рµ (С‡С‚РѕР±С‹ РЅРµ РїРµС‡Р°С‚Р°С‚СЊ РёС… СЃРЅРѕРІР°)
         for (int cb : caseBlocks) switchConsumed.add(cb);
@@ -392,7 +915,28 @@ public final class StructureToAst {
     }
 
 /** РћРїРµСЂР°С‚РѕСЂС‹ РґР»СЏ РѕРґРЅРѕРіРѕ CFG-Р±Р»РѕРєР°: Р±Р°Р№С‚РєРѕРґ Р±Р»РѕРєР° -> (РїСЂРёСЃРІР°РёРІР°РЅРёСЏ + return). */
+    /**
+     * Эмиссия catch-блока: на входе handler'а стек ровно [exception], поэтому
+     * стартуем с {@code e} — иначе {@code ATHROW} (rethrow) терялся молча.
+     */
+    private List<Ast.Stmt> runHandlerBlock(int blockIndex) {
+        catchEmits.merge(blockIndex, 1, Integer::sum);
+        BasicBlock bb = blocks.get(blockIndex);
+        BytecodeToExpr emu = newEmu();
+        List<AbstractInsnNode> all = new ArrayList<>(bb.getInstructions());
+        return emu.runBlock(all, false, List.of(new Ast.Var("e")));
+    }
+
     private List<Ast.Stmt> blockToStmt(int blockIndex) {
+        return blockToStmt(blockIndex, true);
+    }
+
+    /**
+     * @param count false — пробная эмиссия (try-body): её нельзя считать в
+     *              emitCounts, иначе пустой try даёт ложный double emit.
+     */
+    private List<Ast.Stmt> blockToStmt(int blockIndex, boolean count) {
+        if (count) normalEmits.merge(blockIndex, 1, Integer::sum);
         BasicBlock bb = blocks.get(blockIndex);
         BytecodeToExpr emu = newEmu();
         List<AbstractInsnNode> all = new ArrayList<>(bb.getInstructions());
@@ -404,10 +948,15 @@ public final class StructureToAst {
         return new BytecodeToExpr(names, slotTypes, decryptor)
                 .withSlotZero(slotZero)
                 .booleanReturning(isBooleanReturn(method.desc))
-                .currentOwner(classOwner);
+                .currentOwner(classOwner)
+                .withLiteralSink(sourcedLiterals)
+                .staticMethod(isStatic);
     }
 
     /** РЈСЃР»РѕРІРёРµ Р±Р»РѕРєР° (РґРѕ СѓСЃР»РѕРІРЅРѕРіРѕ РїРµСЂРµС…РѕРґР°). */
+    /** Операторы prelude из последнего condFrom (для проверки потерь). */
+    private List<Ast.Stmt> lastCondStatements = List.of();
+
     private Ast.Expr condFrom(int blockIndex) {
         BasicBlock bb = blocks.get(blockIndex);
         BytecodeToExpr emu = newEmu();
@@ -418,7 +967,13 @@ public final class StructureToAst {
         // РїСЂРѕРіРѕРЅСЏРµРј СЃРѕ РІСЃРµРјРё РёРЅСЃС‚СЂСѓРєС†РёСЏРјРё вЂ” С‚РµСЂРјРёРЅР°Р»СЊРЅС‹Р№ СѓСЃР»РѕРІРЅС‹Р№ РїРµСЂРµС…РѕРґ
         // СЃС„РѕСЂРјРёСЂСѓРµС‚ СЃСЂР°РІРЅРµРЅРёРµ РЅР° СЃС‚РµРєРµ, runExpr РІРµСЂРЅС‘С‚ РµРіРѕ РІРµСЂС€РёРЅСѓ.
         Ast.Expr e = emu.runExpr(prefix);
-        return e == null ? new Ast.Literal(true) : e;
+        lastCondStatements = emu.lastStatements();
+        if (e == null) {
+            // Условие не построено: фабриковать true нельзя (provenance).
+            throw new UndecompilableException(
+                    UndecompilableException.Kind.OTHER, "condition lost");
+        }
+        return e;
     }
 
     private Ast.Expr loopCond(int header, java.util.Set<Integer> bodyIdx) {
@@ -442,7 +997,7 @@ public final class StructureToAst {
                 return condFrom(s.index());
             }
         }
-        return new Ast.Literal(true);
+        return sourced(new Ast.Literal(true));
     }
 
     /** РџСЂРµРµРјРЅРёРє Р±Р»РѕРєР° РїРѕ СѓСЃР»РѕРІРЅРѕРјСѓ РїРµСЂРµС…РѕРґСѓ j (РґРµСЃРµСЂРёР°Р»РёР·Р°С†РёСЏ РјРµС‚РєРё РІ РёРЅРґРµРєСЃ). */

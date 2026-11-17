@@ -63,34 +63,31 @@ public final class Ast {
             if (slot >= thisOffset && slot < thisOffset + paramCount) {
                 base = "p" + (slot - thisOffset);
             } else {
-                char prefix;
-                String t = typeName == null ? "Object" : typeName.toLowerCase();
-                if (t.contains("int") || t.contains("boolean") || t.contains("byte")
-                        || t.contains("short") || t.contains("char")) {
-                    prefix = 'i';
-                } else if (t.contains("long")) {
-                    prefix = 'l';
-                } else if (t.contains("double")) {
-                    prefix = 'd';
-                } else if (t.contains("float")) {
-                    prefix = 'f';
-                } else if (t.equals("object") || t.contains("string")) {
-                    prefix = 'o';
-                } else {
-                    prefix = 'o';
-                }
-                base = prefix + "Var" + slot;
+                // Префикс — только по настоящим примитивам (и их массивам): иначе
+                // объектные типы с "int"/"float" в имени (PrintStream, IntStream)
+                // получали бы примитивные имена iVar/fVar.
+                char p = primitivePrefix(typeName);
+                base = (p != 0 ? p : 'o') + "Var" + slot;
             }
             return base;
         }
 
+        /** Префикс имени для примитива: i/l/f/d, либо 0 для ссылочного типа. */
+        private static char primitivePrefix(String typeName) {
+            String t = typeName == null ? "" : typeName;
+            while (t.endsWith("[]")) t = t.substring(0, t.length() - 2);
+            return switch (t) {
+                case "int", "boolean", "byte", "short", "char" -> 'i';
+                case "long" -> 'l';
+                case "double" -> 'd';
+                case "float" -> 'f';
+                default -> 0;
+            };
+        }
+
         /** true, если friendly-имя типа соответствует примитиву (int/long/.../byte). */
         static boolean isPrimitiveName(String typeName) {
-            if (typeName == null) return false;
-            String t = typeName.toLowerCase();
-            return t.contains("int") || t.contains("boolean") || t.contains("byte")
-                    || t.contains("short") || t.contains("char")
-                    || t.contains("long") || t.contains("double") || t.contains("float");
+            return primitivePrefix(typeName) != 0;
         }
     }
 
@@ -209,6 +206,14 @@ public final class Ast {
 
     /** Пустой оператор (нет операции). */
     public record Nop() implements Stmt {
+    }
+
+    /** Сырой текст (комментарий/маркер), печатается как есть. */
+    public record Raw(String text) implements Stmt {
+        @Override
+        public String toString() {
+            return text;
+        }
     }
 
     /** Объявление локальной переменной: {@code Type name;}. */

@@ -45,6 +45,8 @@ public final class BytecodeToExpr {
     private SlotZeroResolver slotZero = SlotZeroResolver.none();
     /** Метод возвращает boolean (IRETURN 0/1 -> return false/true). */
     private boolean booleanReturn;
+    /** 1 для instance (слот 0 = this), 0 для static — для типов pN-слотов. */
+    private int thisOffset = 1;
     /** Внутреннее имя текущего класса (для super()/this() в конструкторах). */
     private String classOwner;
     /**
@@ -54,6 +56,32 @@ public final class BytecodeToExpr {
      * встрече {@code <init>} собрать корректное {@code k = new X(args)}.
      */
     private final java.util.Map<String, Ast.NewObject> pendingNew = new java.util.LinkedHashMap<>();
+    /** Общий на метод приёмник литералов: инвариант provenance (см. StructureToAst). */
+    private java.util.Set<Ast.Expr> literalSink;
+
+    /** Привязывает общий реестр литералов (identity-set на метод). */
+    public BytecodeToExpr withLiteralSink(java.util.Set<Ast.Expr> sink) {
+        this.literalSink = sink;
+        return this;
+    }
+
+    /**
+     * Единственная точка создания литералов. Каждый литерал в выхлопе обязан
+     * происходить из байткодной инструкции/её свёртки; фабрикация значений
+     * (0/null на пустом стеке) запрещена и детектится инвариантом provenance.
+     */
+    private Ast.Literal lit(Object v) {
+        Ast.Literal l = new Ast.Literal(v);
+        if (literalSink != null) literalSink.add(l);
+        return l;
+    }
+
+    /** null тоже литерал: фабрикуется только из ACONST_NULL/IFNULL/IFNONNULL. */
+    private Ast.NullLit nullLit() {
+        Ast.NullLit n = new Ast.NullLit();
+        if (literalSink != null) literalSink.add(n);
+        return n;
+    }
 
     public BytecodeToExpr(Ast.VarNameResolver names, String[] slotTypes) {
         this(names, slotTypes, null);
@@ -78,6 +106,12 @@ public final class BytecodeToExpr {
         return this;
     }
 
+    /** static-метод: thisOffset = 0 (нужно для категорий pN-слотов). */
+    public BytecodeToExpr staticMethod(boolean isStatic) {
+        this.thisOffset = isStatic ? 0 : 1;
+        return this;
+    }
+
     /** Внутреннее имя текущего класса — чтобы отличить super(...) от this(...). */
     public BytecodeToExpr currentOwner(String owner) {
         this.classOwner = owner;
@@ -97,10 +131,21 @@ public final class BytecodeToExpr {
      * @param stopBeforeReturn если true — обрывать на условном-переходе (для условий)
      */
     public List<Ast.Stmt> runBlock(List<AbstractInsnNode> insns, boolean stopBeforeReturn) {
+        return runBlock(insns, stopBeforeReturn, List.of());
+    }
+
+    /**
+     * Прогон блока с заданным входным стеком (снизу вверх). Нужен для catch-блока:
+     * на его входе ровно [exception], поэтому эмиттер стартует с {@code e}, а не
+     * с пустого стека (иначе ATHROW молча терялся).
+     */
+    public List<Ast.Stmt> runBlock(List<AbstractInsnNode> insns, boolean stopBeforeReturn,
+                                   List<Ast.Expr> entryStack) {
         stack.clear();
         stmts.clear();
         pendingNew.clear();
         terminated = false;
+        for (Ast.Expr e : entryStack) stack.push(e);
         for (AbstractInsnNode n : insns) {
             consume(n, stopBeforeReturn);
         }
@@ -189,15 +234,20 @@ public final class BytecodeToExpr {
     }
 
     /** Литерал 0/1 -> false/true, если цель boolean. */
-    private static Ast.Expr boolLit(Ast.Expr v, boolean isBool) {
+    private Ast.Expr boolLit(Ast.Expr v, boolean isBool) {
         if (!isBool || !(v instanceof Ast.Literal l)) return v;
         Object val = l.value();
         if (val instanceof Number num) {
             int i = num.intValue();
-            if (i == 0) return new Ast.Literal(false);
-            if (i == 1) return new Ast.Literal(true);
+            if (i == 0) return lit(false);
+            if (i == 1) return lit(true);
         }
         return v;
+    }
+
+    /** Операторы, произведённые последним runExpr/extractSwitchKey (prelude). */
+    public List<Ast.Stmt> lastStatements() {
+        return new ArrayList<>(stmts);
     }
 
     private void consume(AbstractInsnNode n, boolean stopBeforeReturn) {
@@ -211,19 +261,22 @@ public final class BytecodeToExpr {
             case Opcodes.NOP -> {
             }
             // --- константы ---
-            case Opcodes.ACONST_NULL -> stack.push(new Ast.NullLit());
-            case Opcodes.ICONST_M1 -> stack.push(new Ast.Literal(-1));
-            case Opcodes.ICONST_0 -> stack.push(new Ast.Literal(0));
-            case Opcodes.ICONST_1 -> stack.push(new Ast.Literal(1));
-            case Opcodes.ICONST_2 -> stack.push(new Ast.Literal(2));
-            case Opcodes.ICONST_3 -> stack.push(new Ast.Literal(3));
-            case Opcodes.ICONST_4 -> stack.push(new Ast.Literal(4));
-            case Opcodes.ICONST_5 -> stack.push(new Ast.Literal(5));
-            case Opcodes.LCONST_0 -> stack.push(new Ast.Literal(0L));
-            case Opcodes.LCONST_1 -> stack.push(new Ast.Literal(1L));
-            case Opcodes.FCONST_0 -> stack.push(new Ast.Literal(0.0f));
-            case Opcodes.DCONST_0 -> stack.push(new Ast.Literal(0.0d));
-            case Opcodes.BIPUSH, Opcodes.SIPUSH -> stack.push(new Ast.Literal(((IntInsnNode) n).operand));
+            case Opcodes.ACONST_NULL -> stack.push(nullLit());
+            case Opcodes.ICONST_M1 -> stack.push(lit(-1));
+            case Opcodes.ICONST_0 -> stack.push(lit(0));
+            case Opcodes.ICONST_1 -> stack.push(lit(1));
+            case Opcodes.ICONST_2 -> stack.push(lit(2));
+            case Opcodes.ICONST_3 -> stack.push(lit(3));
+            case Opcodes.ICONST_4 -> stack.push(lit(4));
+            case Opcodes.ICONST_5 -> stack.push(lit(5));
+            case Opcodes.LCONST_0 -> stack.push(lit(0L));
+            case Opcodes.LCONST_1 -> stack.push(lit(1L));
+            case Opcodes.FCONST_0 -> stack.push(lit(0.0f));
+            case Opcodes.FCONST_1 -> stack.push(lit(1.0f));
+            case Opcodes.FCONST_2 -> stack.push(lit(2.0f));
+            case Opcodes.DCONST_0 -> stack.push(lit(0.0d));
+            case Opcodes.DCONST_1 -> stack.push(lit(1.0d));
+            case Opcodes.BIPUSH, Opcodes.SIPUSH -> stack.push(lit(((IntInsnNode) n).operand));
             case Opcodes.LDC -> {
                 Object cst = ((LdcInsnNode) n).cst;
                 if (cst instanceof org.objectweb.asm.Type t) {
@@ -231,7 +284,7 @@ public final class BytecodeToExpr {
                     String typeName = Ast.friendlyType(t.getDescriptor());
                     stack.push(new Ast.Field(null, typeName + ".class", true));
                 } else {
-                    stack.push(new Ast.Literal(cst));
+                    stack.push(lit(cst));
                 }
             }
             // --- локальные ---
@@ -274,7 +327,7 @@ public final class BytecodeToExpr {
             case Opcodes.IINC -> {
                 IincInsnNode i = (IincInsnNode) n;
                 Ast.Var tgt = new Ast.Var(name(i.var));
-                stmts.add(new Ast.Assign(tgt, new Ast.Binary("+", tgt, new Ast.Literal(i.incr))));
+                stmts.add(new Ast.Assign(tgt, new Ast.Binary("+", tgt, lit(i.incr))));
             }
             // --- арифметика (int) ---
             case Opcodes.IADD -> bin("+");
@@ -298,6 +351,28 @@ public final class BytecodeToExpr {
             case Opcodes.LAND -> bin("&");
             case Opcodes.LOR -> bin("|");
             case Opcodes.LXOR -> bin("^");
+            case Opcodes.LSHL -> bin("<<");
+            case Opcodes.LSHR -> bin(">>");
+            case Opcodes.LUSHR -> bin(">>>");
+            case Opcodes.LNEG -> un("-");
+            // --- float ---
+            case Opcodes.FADD -> bin("+");
+            case Opcodes.FSUB -> bin("-");
+            case Opcodes.FMUL -> bin("*");
+            case Opcodes.FDIV -> bin("/");
+            case Opcodes.FREM -> bin("%");
+            case Opcodes.FNEG -> un("-");
+            // --- double ---
+            case Opcodes.DADD -> bin("+");
+            case Opcodes.DSUB -> bin("-");
+            case Opcodes.DMUL -> bin("*");
+            case Opcodes.DDIV -> bin("/");
+            case Opcodes.DREM -> bin("%");
+            case Opcodes.DNEG -> un("-");
+            // --- сравнения: нужен peephole с IFxx, пока честный отказ ---
+            case Opcodes.LCMP, Opcodes.FCMPL, Opcodes.FCMPG, Opcodes.DCMPL, Opcodes.DCMPG ->
+                    throw new UndecompilableException(
+                            UndecompilableException.Kind.OTHER, "cmp opcode");
             // --- поля ---
             case Opcodes.GETSTATIC -> {
                 FieldInsnNode f = (FieldInsnNode) n;
@@ -305,12 +380,21 @@ public final class BytecodeToExpr {
                 if ("Z".equals(f.desc)) booleanExprs.add(fld);
                 stack.push(fld);
             }
+            case Opcodes.PUTSTATIC -> {
+                FieldInsnNode f = (FieldInsnNode) n;
+                Ast.Expr v = pop();
+                Ast.Expr val = boolLit(v, "Z".equals(f.desc));
+                String owner = Ast.friendlyType("L" + f.owner + ";");
+                stmts.add(new Ast.Assign(new Ast.Var(owner + "." + f.name), val));
+            }
             case Opcodes.PUTFIELD -> {
                 Ast.Expr v = pop();
                 Ast.Expr t = pop();
                 FieldInsnNode f = (FieldInsnNode) n;
                 Ast.Expr val = boolLit(v, "Z".equals(f.desc)); // boolean-поле: 0/1 -> false/true
-                stmts.add(new Ast.Assign(new Ast.Var("this." + f.name), val)); // упрощённо, field-write
+                // Получатель — реальный, а не всегда this (oVar3.x = 1).
+                Ast.Field target = new Ast.Field(t, f.name, false);
+                stmts.add(new Ast.Assign(new Ast.Var(target.toString()), val));
             }
             case Opcodes.GETFIELD -> {
                 // instance-поле: receiver.field. Ресивер берём со стека; если это
@@ -336,8 +420,66 @@ public final class BytecodeToExpr {
                 stack.push(new Ast.NewObject(newDesc, new ArrayList<>()));
             }
             case Opcodes.DUP -> {
-                // пустой стек (например, DUP после store) — peek() вернул бы null
-                if (!stack.isEmpty()) stack.push(stack.peek());
+                if (stack.isEmpty()) {
+                    throw new UndecompilableException(
+                            UndecompilableException.Kind.UNDERFLOW, "DUP on empty stack");
+                }
+                stack.push(stack.peek());
+            }
+            case Opcodes.DUP_X1 -> {
+                Boolean b1 = category2(stackAt(0));
+                Boolean b2 = category2(stackAt(1));
+                if (!Boolean.FALSE.equals(b1) || !Boolean.FALSE.equals(b2)) {
+                    throw new UndecompilableException(
+                            UndecompilableException.Kind.UNDERFLOW, "DUP_X1 category");
+                }
+                Ast.Expr a = pop();
+                Ast.Expr b = pop();
+                stack.push(a);
+                stack.push(b);
+                stack.push(a);
+            }
+            case Opcodes.DUP_X2 -> {
+                Boolean b1 = category2(stackAt(0));
+                Boolean b2 = category2(stackAt(1));
+                if (Boolean.FALSE.equals(b1) && Boolean.TRUE.equals(b2)) {
+                    Ast.Expr a = pop();
+                    Ast.Expr b = pop();
+                    stack.push(a);
+                    stack.push(b);
+                    stack.push(a);
+                } else if (Boolean.FALSE.equals(b1) && Boolean.FALSE.equals(b2)
+                        && Boolean.FALSE.equals(category2(stackAt(2)))) {
+                    Ast.Expr a = pop();
+                    Ast.Expr b = pop();
+                    Ast.Expr c = pop();
+                    stack.push(a);
+                    stack.push(c);
+                    stack.push(b);
+                    stack.push(a);
+                } else {
+                    throw new UndecompilableException(
+                            UndecompilableException.Kind.UNDERFLOW, "DUP_X2 category");
+                }
+            }
+            case Opcodes.DUP2 -> {
+                Boolean b1 = category2(stackAt(0));
+                if (Boolean.TRUE.equals(b1)) {
+                    Ast.Expr a = pop();
+                    stack.push(a);
+                    stack.push(a);
+                } else if (Boolean.FALSE.equals(b1)
+                        && Boolean.FALSE.equals(category2(stackAt(1)))) {
+                    Ast.Expr a = pop();
+                    Ast.Expr b = pop();
+                    stack.push(b);
+                    stack.push(a);
+                    stack.push(b);
+                    stack.push(a);
+                } else {
+                    throw new UndecompilableException(
+                            UndecompilableException.Kind.UNDERFLOW, "DUP2 category");
+                }
             }
             // --- условные переходы (даем выражение, если stopBeforeReturn=false) ---
             case Opcodes.IF_ICMPEQ, Opcodes.IF_ICMPNE, Opcodes.IF_ICMPLT, Opcodes.IF_ICMPGE,
@@ -346,6 +488,12 @@ public final class BytecodeToExpr {
                 Ast.Expr l = pop();
                 stack.push(new Ast.Binary(cmpOp(n.getOpcode(), true), l, r));
             }
+            case Opcodes.IF_ACMPEQ, Opcodes.IF_ACMPNE -> {
+                Ast.Expr r = pop();
+                Ast.Expr l = pop();
+                stack.push(new Ast.Binary(
+                        n.getOpcode() == Opcodes.IF_ACMPEQ ? "==" : "!=", l, r));
+            }
             case Opcodes.IFEQ, Opcodes.IFNE, Opcodes.IFLT, Opcodes.IFGE, Opcodes.IFGT, Opcodes.IFLE -> {
                 Ast.Expr v = pop();
                 // boolean-выражение не сравниваем с 0: hasNext() != 0 -> hasNext()
@@ -353,14 +501,14 @@ public final class BytecodeToExpr {
                         && (n.getOpcode() == Opcodes.IFEQ || n.getOpcode() == Opcodes.IFNE)) {
                     stack.push(n.getOpcode() == Opcodes.IFEQ ? new Ast.Unary("!", v) : v);
                 } else {
-                    stack.push(new Ast.Binary(cmpOp(n.getOpcode(), false), v, new Ast.Literal(0)));
+                    stack.push(new Ast.Binary(cmpOp(n.getOpcode(), false), v, lit(0)));
                 }
             }
             case Opcodes.IFNULL, Opcodes.IFNONNULL -> {
                 Ast.Expr v = pop();
                 stack.push(n.getOpcode() == Opcodes.IFNULL
-                        ? new Ast.Binary("==", v, new Ast.NullLit())
-                        : new Ast.Binary("!=", v, new Ast.NullLit()));
+                        ? new Ast.Binary("==", v, nullLit())
+                        : new Ast.Binary("!=", v, nullLit()));
             }
             // --- массивы ---
             case Opcodes.IALOAD, Opcodes.LALOAD, Opcodes.FALOAD, Opcodes.DALOAD, Opcodes.AALOAD,
@@ -438,23 +586,46 @@ public final class BytecodeToExpr {
             case Opcodes.I2S -> conv("(short)");
             // --- управление ---
             case Opcodes.ATHROW -> {
-                // мёртвый ATHROW без объекта-исключения (после return) — не эмитим throw(0)
-                if (stack.isEmpty()) return;
+                // ATHROW по JVM всегда кидает ссылку. Пустой стек здесь — потеря
+                // значения (стек из другого блока/непрогружённый handler): это
+                // честный отказ, а не молчаливое проглатывание throw.
+                if (stack.isEmpty()) {
+                    throw new UndecompilableException(
+                            UndecompilableException.Kind.UNDERFLOW, "empty stack at ATHROW");
+                }
                 Ast.Expr v = pop();
                 // ATHROW по JVM всегда кидает ссылку на Throwable. Если на стеке
                 // примитив (число/primitive-var) — стек испорчен (catch-слот
                 // переиспользован, де-флаттенинг), настоящий throw объект потерян.
                 // Такой throw бессмыслен — не эмитим, но блок завершаем.
-                if (isPrimitiveThrowArg(v)) { terminated = true; stack.clear(); return; }
+                if (isPrimitiveThrowArg(v)) {
+                    throw new UndecompilableException(
+                            UndecompilableException.Kind.UNDERFLOW, "primitive throw");
+                }
                 stmts.add(new Ast.ExprStmt(new Ast.Call(null, "throw", List.of(v), false)));
                 terminated = true;
                 stack.clear();
             }
             case Opcodes.MONITORENTER, Opcodes.MONITOREXIT -> {
-                pop(); // монитор
+                // synchronized-семантика пока не восстанавливается: молча терять
+                // монитор нельзя, это тихо неверный код.
+                throw new UndecompilableException(
+                        UndecompilableException.Kind.OTHER, "monitor opcode");
             }
             case Opcodes.POP -> pop();
-            case Opcodes.POP2 -> { pop(); pop(); }
+            case Opcodes.POP2 -> {
+                Boolean b1 = category2(stackAt(0));
+                if (Boolean.TRUE.equals(b1)) {
+                    pop();
+                } else if (Boolean.FALSE.equals(b1)
+                        && Boolean.FALSE.equals(category2(stackAt(1)))) {
+                    pop();
+                    pop();
+                } else {
+                    throw new UndecompilableException(
+                            UndecompilableException.Kind.UNDERFLOW, "POP2 category");
+                }
+            }
             case Opcodes.SWAP -> {
                 Ast.Expr a = pop();
                 Ast.Expr b = pop();
@@ -466,11 +637,13 @@ public final class BytecodeToExpr {
                 Ast.Expr v = pop();
                 // boolean-метод: IRETURN 0/1 -> return false/true (вместо return Literal(0))
                 if (booleanReturn && n.getOpcode() == Opcodes.IRETURN) v = boolLit(v, true);
-                // ARETURN с числовым литералом = потерянное значение (нельзя вернуть int
-                // из объектного метода) — эмитим return null вместо return 0.
+                // ARETURN с числовым литералом = потерянное значение (нельзя вернуть
+                // int из объектного метода). Раньше тут фабриковался null — теперь
+                // это честный отказ (provenance: null не из ACONST_NULL).
                 if (n.getOpcode() == Opcodes.ARETURN && v instanceof Ast.Literal l
                         && l.value() instanceof Number) {
-                    v = new Ast.NullLit();
+                    throw new UndecompilableException(
+                            UndecompilableException.Kind.UNDERFLOW, "int on ARETURN");
                 }
                 stmts.add(new Ast.Return(v));
                 terminated = true;
@@ -484,7 +657,10 @@ public final class BytecodeToExpr {
             // --- GOTO: терминатор без значения; стек очищаем ---
             case Opcodes.GOTO -> stack.clear();
             default -> {
-                // незнакомые: потребляем (не даём тихому падению)
+                // Незнакомый опкод нельзя «потреблять» молча: стек разъедется,
+                // и дальше получится тихо неверный код.
+                throw new UndecompilableException(
+                        UndecompilableException.Kind.OTHER, "unsupported opcode " + n.getOpcode());
             }
         }
     }
@@ -539,12 +715,12 @@ public final class BytecodeToExpr {
             for (int i = 0; i < handles.size(); i++) {
                 if (i > 0) sb.append(", ");
                 sb.append(handles.get(i).getName()).append('=');
-                parts.add(new Ast.Literal(sb.toString()));
+                parts.add(lit(sb.toString()));
                 sb.setLength(0);
                 parts.add(new Ast.Field(recv, handles.get(i).getName(), false));
             }
             sb.append(']');
-            parts.add(new Ast.Literal(sb.toString()));
+            parts.add(lit(sb.toString()));
             Ast.Expr e = parts.get(0);
             for (int i = 1; i < parts.size(); i++) e = new Ast.Binary("+", e, parts.get(i));
             stack.push(e);
@@ -567,7 +743,7 @@ public final class BytecodeToExpr {
                 acc = acc == null ? cmp : new Ast.Binary("&&", acc, cmp);
             }
             Ast.Expr inst = new Ast.Binary("instanceof", other, new Ast.Var(simple));
-            Ast.Expr body = acc == null ? new Ast.Literal(true) : new Ast.Binary("&&", inst, acc);
+            Ast.Expr body = acc == null ? lit(true) : new Ast.Binary("&&", inst, acc);
             stack.push(new Ast.Binary("||", new Ast.Binary("==", other, recv), body));
             return;
         }
@@ -584,18 +760,18 @@ public final class BytecodeToExpr {
         for (int i = 0; i < recipe.length(); i++) {
             char ch = recipe.charAt(i);
             if (ch == '\1') { // \u0001 — очередной динамический аргумент
-                if (cur.length() > 0) { parts.add(new Ast.Literal(cur.toString())); cur.setLength(0); }
+                if (cur.length() > 0) { parts.add(lit(cur.toString())); cur.setLength(0); }
                 if (dyn < dynArgs.size()) parts.add(dynArgs.get(dyn++));
             } else if (ch == '\2') { // \u0002 — очередная константа из bsmArgs
-                if (cur.length() > 0) { parts.add(new Ast.Literal(cur.toString())); cur.setLength(0); }
-                if (cst < bsmArgs.length && bsmArgs[cst] != null) parts.add(new Ast.Literal(bsmArgs[cst]));
+                if (cur.length() > 0) { parts.add(lit(cur.toString())); cur.setLength(0); }
+                if (cst < bsmArgs.length && bsmArgs[cst] != null) parts.add(lit(bsmArgs[cst]));
                 cst++;
             } else {
                 cur.append(ch);
             }
         }
-        if (cur.length() > 0) parts.add(new Ast.Literal(cur.toString()));
-        if (parts.isEmpty()) return new Ast.Literal("");
+        if (cur.length() > 0) parts.add(lit(cur.toString()));
+        if (parts.isEmpty()) return lit("");
         Ast.Expr e = parts.get(0);
         for (int i = 1; i < parts.size(); i++) e = new Ast.Binary("+", e, parts.get(i));
         return e;
@@ -613,18 +789,14 @@ public final class BytecodeToExpr {
         return new Ast.Var("this::" + nm); // виртуальный/специальный — обычно this::m
     }
 
-    /** Типизированная заглушка для неизвестного invokedynamic по коду возврата. */
+    /**
+     * Неизвестный invokedynamic: раньше подставлялась типизированная заглушка
+     * (0/null) без provenance. Теперь это явный отказ.
+     */
     private static Ast.Expr placeholderFor(String ret) {
-        if (ret.isEmpty()) return null;
-        return switch (ret.charAt(0)) {
-            case 'V' -> null;
-            case 'Z' -> new Ast.Literal(false);
-            case 'B', 'C', 'S', 'I' -> new Ast.Literal(0);
-            case 'J' -> new Ast.Literal(0L);
-            case 'F' -> new Ast.Literal(0.0f);
-            case 'D' -> new Ast.Literal(0.0d);
-            default -> new Ast.NullLit();
-        };
+        if (ret.isEmpty() || "V".equals(ret)) return null;
+        throw new UndecompilableException(
+                UndecompilableException.Kind.OTHER, "unknown bootstrap");
     }
 
     private void doCall(MethodInsnNode m) {
@@ -640,12 +812,12 @@ public final class BytecodeToExpr {
                 if (decryptor != null) {
                     String s = decryptor.decrypt(className, index);
                     if (s != null) {
-                        stack.push(new Ast.Literal(s));
+                        stack.push(lit(s));
                         return;
                     }
                 }
                 // ключа нет или класс не загружен — помечаем как зашифрованную строку
-                stack.push(new Ast.Literal("<!-- enc:" + className + "#" + index + " -->"));
+                stack.push(lit("<!-- enc:" + className + "#" + index + " -->"));
                 return;
             }
         }
@@ -690,7 +862,8 @@ public final class BytecodeToExpr {
         // --- остаточный невалидный <init> на переменной/литерале (стек испорчен) ---
         // Печатать `p0.<init>(...)`, `16.0.<init>(...)` невалидно — подавляем.
         if (m.name.equals("<init>")) {
-            return;
+            throw new UndecompilableException(
+                    UndecompilableException.Kind.OTHER, "stray <init>");
         }
 
         String retDesc = m.desc.substring(m.desc.indexOf(')') + 1);
@@ -737,7 +910,7 @@ public final class BytecodeToExpr {
         Ast.Expr l = pop();
         // свёртка константной арифметики: -191 + 193 -> 2 (и во всех выражениях)
         Object cv = Ast.constValue(new Ast.Binary(op, l, r));
-        stack.push(cv != null ? new Ast.Literal(cv) : new Ast.Binary(op, l, r));
+        stack.push(cv != null ? lit(cv) : new Ast.Binary(op, l, r));
     }
 
     /** Конвертация типа: (targetType)operand. */
@@ -763,11 +936,80 @@ public final class BytecodeToExpr {
     private void un(String op) {
         Ast.Expr o = pop();
         Object cv = Ast.constValue(new Ast.Unary(op, o));
-        stack.push(cv != null ? new Ast.Literal(cv) : new Ast.Unary(op, o));
+        stack.push(cv != null ? lit(cv) : new Ast.Unary(op, o));
+    }
+
+    /** true — категория 2 (long/double), false — 1, null — не доказано. */
+    private Boolean category2(Ast.Expr e) {
+        if (e == null) return null;
+        if (e instanceof Ast.Literal l) {
+            Object v = l.value();
+            if (v instanceof Long || v instanceof Double) return true;
+            if (v instanceof Integer || v instanceof Float || v instanceof Boolean
+                    || v instanceof String || v instanceof Character) return false;
+            return null;
+        }
+        if (e instanceof Ast.NullLit) return false;
+        if (e instanceof Ast.Var v) {
+            String n = v.name();
+            if (n.startsWith("lVar") || n.startsWith("dVar")) return true;
+            if (n.startsWith("iVar") || n.startsWith("fVar") || n.startsWith("oVar")
+                    || "this".equals(n)) return false;
+            if (n.matches("p\\d+")) {
+                int slot = Integer.parseInt(n.substring(1)) + thisOffset;
+                if (slotTypes != null && slot >= 0 && slot < slotTypes.length) {
+                    String t = slotTypes[slot];
+                    if ("long".equals(t) || "double".equals(t)) return true;
+                    if (t != null && !t.isEmpty() && !"Object".equals(t)
+                            && !"java.lang.Object".equals(t)) return false;
+                }
+            }
+            return null;
+        }
+        if (e instanceof Ast.Unary u) {
+            String op = u.op();
+            if ("(long)".equals(op) || "(double)".equals(op)) return true;
+            if ("(int)".equals(op) || "(float)".equals(op) || "(byte)".equals(op)
+                    || "(char)".equals(op) || "(short)".equals(op) || "!".equals(op)) return false;
+            if ("-".equals(op) || "~".equals(op)) return category2(u.operand());
+            return null;
+        }
+        if (e instanceof Ast.Binary b) {
+            String op = b.op();
+            if ("==".equals(op) || "!=".equals(op) || "<".equals(op) || "<=".equals(op)
+                    || ">".equals(op) || ">=".equals(op) || "&&".equals(op)
+                    || "||".equals(op) || "instanceof".equals(op)) return false;
+            return null; // арифметика без типов не доказывается
+        }
+        if (e instanceof Ast.Call c) {
+            String r = c.retDesc();
+            if (r == null) return null;
+            if ("J".equals(r) || "D".equals(r)) return true;
+            if ("I".equals(r) || "F".equals(r) || "Z".equals(r) || "B".equals(r)
+                    || "C".equals(r) || "S".equals(r)
+                    || r.startsWith("L") || r.startsWith("[")) return false;
+            return null;
+        }
+        if (e instanceof Ast.NewObject) return false;
+        return null;
+    }
+
+    /** Значение на позиции index от вершины (0 = top). */
+    private Ast.Expr stackAt(int index) {
+        int k = 0;
+        for (Ast.Expr e : stack) {
+            if (k++ == index) return e;
+        }
+        return null;
     }
 
     private Ast.Expr pop() {
-        if (stack.isEmpty()) return new Ast.Literal(0);
+        if (stack.isEmpty()) {
+            // Значение должно было прийти из другого блока (entry-stack ещё не
+            // реализован) или стек реально испорчен. Фабриковать 0/null нельзя:
+            // это тихо неверный код. Помечаем метод undecompilable.
+            throw new UndecompilableException(UndecompilableException.Kind.UNDERFLOW, null);
+        }
         return stack.pop();
     }
 

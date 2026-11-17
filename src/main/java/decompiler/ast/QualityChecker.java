@@ -20,6 +20,17 @@ public final class QualityChecker {
         public int newObject = 0;                // new Object(
         public int deadIVarConst = 0;            // iVarN = const после return/недостижим
         public int returnZero = 0;               // return 0;
+        public int undecompilable = 0;           // методов с явным отказом (raw-маркер)
+        public int undecompilableUnderflow = 0;
+        public int undecompilableLostBlock = 0;
+        public int undecompilableDoubleEmit = 0;
+        public int undecompilableDeadCode = 0;
+        public int undecompilableMissingReturn = 0;
+        public int undecompilableOther = 0;
+        public int undecompilableJoinDepth = 0;
+        public int undecompilableIrreducible = 0;
+        public int classErrors = 0;              // класс целиком упал при печати
+        public int undecompilableClinit = 0;     // отказы в <clinit> (ExceptionInInitializerError)
         public int ctorInit = 0;                 // this.<init>(, oVar0.<init>(
         public int questionMark = 0;             // /* ? */
         public int lineCount = 0;
@@ -57,6 +68,17 @@ public final class QualityChecker {
             this.newObject += o.newObject;
             this.deadIVarConst += o.deadIVarConst;
             this.returnZero += o.returnZero;
+            this.undecompilable += o.undecompilable;
+            this.undecompilableUnderflow += o.undecompilableUnderflow;
+            this.undecompilableLostBlock += o.undecompilableLostBlock;
+            this.undecompilableDoubleEmit += o.undecompilableDoubleEmit;
+            this.undecompilableDeadCode += o.undecompilableDeadCode;
+            this.undecompilableMissingReturn += o.undecompilableMissingReturn;
+            this.undecompilableOther += o.undecompilableOther;
+            this.undecompilableJoinDepth += o.undecompilableJoinDepth;
+            this.undecompilableIrreducible += o.undecompilableIrreducible;
+            this.classErrors += o.classErrors;
+            this.undecompilableClinit += o.undecompilableClinit;
             this.ctorInit += o.ctorInit;
             this.questionMark += o.questionMark;
             this.lineCount += o.lineCount;
@@ -72,6 +94,29 @@ public final class QualityChecker {
             sb.append(String.format("new Object(:         %d%n", newObject));
             sb.append(String.format("мёртвые iVar=const:  %d%n", deadIVarConst));
             sb.append(String.format("return 0:            %d%n", returnZero));
+            sb.append(String.format("undecompilable:      %d%n", undecompilable));
+            if (undecompilable > 0) {
+                sb.append(String.format("  underflow:         %d%n", undecompilableUnderflow));
+                sb.append(String.format("  lost block:        %d%n", undecompilableLostBlock));
+                sb.append(String.format("  double emit:       %d%n", undecompilableDoubleEmit));
+                sb.append(String.format("  dead code:         %d%n", undecompilableDeadCode));
+                sb.append(String.format("  missing return:    %d%n", undecompilableMissingReturn));
+                sb.append(String.format("  other:             %d%n", undecompilableOther));
+                sb.append(String.format("  join depth:        %d%n", undecompilableJoinDepth));
+                sb.append(String.format("  irreducible:       %d%n", undecompilableIrreducible));
+                // Правило: ровно одна primary reason на метод; сумма бакетов
+                // обязана совпадать с total. clinit — secondary, в сумму не входит.
+                int primary = undecompilableUnderflow + undecompilableLostBlock
+                        + undecompilableDoubleEmit + undecompilableDeadCode
+                        + undecompilableMissingReturn + undecompilableOther
+                        + undecompilableJoinDepth + undecompilableIrreducible;
+                if (primary != undecompilable) {
+                    sb.append(String.format("  BUCKET MISMATCH:   primary=%d total=%d%n",
+                            primary, undecompilable));
+                }
+                sb.append(String.format("  (secondary) clinit: %d%n", undecompilableClinit));
+            }
+            sb.append(String.format("class-level errors:  %d%n", classErrors));
             sb.append(String.format("this.<init>:         %d%n", ctorInit));
             sb.append(String.format("/* ? */:             %d%n", questionMark));
             sb.append(String.format("БАЛЛ качества:       %d (ниже = лучше)%n", score()));
@@ -124,6 +169,10 @@ public final class QualityChecker {
     private static final Pattern RETURN_ZERO =
             Pattern.compile("return\\s+0[Ll]?;|return\\s+0\\.0\\w*;");
 
+    // // undecompilable: <label>[: detail] @ <метод>
+    private static final Pattern UNDEC_MARKER =
+            Pattern.compile("// undecompilable: ([^@\\r\\n]+?) @");
+
     // this.<init>( или oVar0.<init>(
     private static final Pattern CTOR_INIT =
             Pattern.compile("\\b(this|oVar\\d+)\\s*\\.\\s*<init>\\s*\\(");
@@ -141,6 +190,27 @@ public final class QualityChecker {
         r.newObject = count(NEW_OBJECT, java);
         r.deadIVarConst = count(DEAD_IVAR_CONST, java);
         r.returnZero = count(RETURN_ZERO, java);
+        r.undecompilable = countAll("// undecompilable:", java);
+        // Независимый учёт по точной метке причины: other — это только
+        // нераспознанные метки, а не «total минус известные». Иначе guard
+        // BUCKET MISMATCH не сработает никогда.
+        var um = UNDEC_MARKER.matcher(java);
+        while (um.find()) {
+            String reason = um.group(1).trim();
+            int colon = reason.indexOf(':');
+            String label = (colon >= 0 ? reason.substring(0, colon) : reason).trim();
+            switch (label) {
+                case "underflow" -> r.undecompilableUnderflow++;
+                case "lost block" -> r.undecompilableLostBlock++;
+                case "double emit" -> r.undecompilableDoubleEmit++;
+                case "dead code" -> r.undecompilableDeadCode++;
+                case "missing return" -> r.undecompilableMissingReturn++;
+                case "join depth mismatch" -> r.undecompilableJoinDepth++;
+                case "irreducible" -> r.undecompilableIrreducible++;
+                default -> r.undecompilableOther++;
+            }
+        }
+        r.undecompilableClinit = countAll(" @ <clinit>", java);
         r.ctorInit = count(CTOR_INIT, java);
         r.questionMark = java.contains("/* ? */") ? countAll("/* ? */", java) : 0;
         return r;
