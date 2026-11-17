@@ -4,6 +4,13 @@ import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.FieldInsnNode;
+import org.objectweb.asm.tree.IntInsnNode;
+import org.objectweb.asm.tree.JumpInsnNode;
+import org.objectweb.asm.tree.LdcInsnNode;
+import org.objectweb.asm.tree.LookupSwitchInsnNode;
+import org.objectweb.asm.tree.MultiANewArrayInsnNode;
+import org.objectweb.asm.tree.TableSwitchInsnNode;
+import org.objectweb.asm.tree.TypeInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.VarInsnNode;
@@ -327,144 +334,262 @@ public final class TypeInference {
             }
         }
     }
-    /** Символический проход типов: стек строк по инструкциям, точка для AALOAD/ALOAD/массивов. */
+    /** Символический проход типов по базовым блокам с merge-стеком. */
     private static void symbolicTypes(MethodNode mn, String[] out) {
-        if (mn == null || mn.instructions == null) return;
+        if (mn == null || mn.instructions == null || mn.instructions.size() == 0) return;
         AbstractInsnNode[] insns = mn.instructions.toArray();
-        int n = out.length;
-        java.util.Deque<String> st = new java.util.ArrayDeque<>();
-        try {
-            for (AbstractInsnNode insn : insns) {
-                int op = insn.getOpcode();
-                switch (op) {
-                    case -1 -> { } // label/line/frame
-                    case Opcodes.ACONST_NULL -> st.push("Object");
-                    case Opcodes.ICONST_M1, Opcodes.ICONST_0, Opcodes.ICONST_1, Opcodes.ICONST_2,
-                         Opcodes.ICONST_3, Opcodes.ICONST_4, Opcodes.ICONST_5,
-                         Opcodes.BIPUSH, Opcodes.SIPUSH, Opcodes.ARRAYLENGTH,
-                         Opcodes.IALOAD, Opcodes.LALOAD, Opcodes.FALOAD, Opcodes.DALOAD,
-                         Opcodes.BALOAD, Opcodes.CALOAD, Opcodes.SALOAD,
-                         Opcodes.IADD, Opcodes.ISUB, Opcodes.IMUL, Opcodes.IDIV, Opcodes.IREM,
-                         Opcodes.INEG, Opcodes.I2B, Opcodes.I2C, Opcodes.I2S,
-                         Opcodes.I2L, Opcodes.I2F, Opcodes.I2D -> st.push("int");
-                    case Opcodes.LCONST_0, Opcodes.LCONST_1,
-                         Opcodes.LADD, Opcodes.LSUB, Opcodes.LMUL, Opcodes.LDIV, Opcodes.LREM,
-                         Opcodes.LNEG, Opcodes.L2I, Opcodes.L2F, Opcodes.L2D,
-                         
-                         Opcodes.LAND, Opcodes.LOR, Opcodes.LXOR, Opcodes.LSHL, Opcodes.LSHR, Opcodes.LUSHR -> st.push("long");
-                    case Opcodes.DCONST_0, Opcodes.DCONST_1, Opcodes.DADD, Opcodes.DSUB, Opcodes.DMUL,
-                         Opcodes.DDIV, Opcodes.DREM, Opcodes.DNEG, Opcodes.D2I, Opcodes.D2L,
-                         Opcodes.D2F -> st.push("double");
-                    case Opcodes.FCONST_0, Opcodes.FCONST_1, Opcodes.FCONST_2,
-                         Opcodes.FADD, Opcodes.FSUB, Opcodes.FMUL, Opcodes.FDIV, Opcodes.FREM,
-                         Opcodes.FNEG, Opcodes.F2I, Opcodes.F2L, Opcodes.F2D -> st.push("float");
-                    case Opcodes.LDC -> {
-                        Object c = ((org.objectweb.asm.tree.LdcInsnNode) insn).cst;
-                        if (c instanceof Type t) st.push(friendly(t));
-                        else if (c instanceof Integer || c instanceof Long) st.push(c instanceof Long ? "long" : "int");
-                        else if (c instanceof Float) st.push("float");
-                        else if (c instanceof Double) st.push("double");
-                        else st.push("String");
-                    }
-                    case Opcodes.ALOAD -> {
-                        int var = ((VarInsnNode) insn).var;
-                        st.push(var >= 0 && var < n && out[var] != null ? out[var] : "Object");
-                    }
-                    case Opcodes.ILOAD -> st.push("int");
-                    case Opcodes.LLOAD -> st.push("long");
-                    case Opcodes.FLOAD -> st.push("float");
-                    case Opcodes.DLOAD -> st.push("double");
-                    case Opcodes.ASTORE -> {
-                        int var = ((VarInsnNode) insn).var;
-                        String top = popStr(st);
-                        if (top != null && var >= 0 && var < n && isObjectType(out[var])) out[var] = top;
-                    }
-                    case Opcodes.ISTORE, Opcodes.LSTORE, Opcodes.FSTORE, Opcodes.DSTORE -> popStr(st);
-                    case Opcodes.AALOAD -> {
-                        popStr(st); // index
-                        String arr = popStr(st);
-                        if (arr != null && arr.endsWith("[]")) st.push(arr.substring(0, arr.length() - 2));
-                        else st.push("Object");
-                    }
-                    case Opcodes.AASTORE, Opcodes.IASTORE, Opcodes.LASTORE, Opcodes.FASTORE,
-                         Opcodes.DASTORE, Opcodes.BASTORE, Opcodes.CASTORE, Opcodes.SASTORE -> {
-                        popStr(st); popStr(st); popStr(st);
-                    }
-                    case Opcodes.DUP -> st.push(st.peek());
-                    case Opcodes.POP -> popStr(st);
-                    case Opcodes.POP2 -> { popStr(st); popStr(st); }
-                    case Opcodes.NEW -> {
-                        String d = ((org.objectweb.asm.tree.TypeInsnNode) insn).desc;
-                        st.push(Ast.friendlyType("L" + d + ";"));
-                    }
-                    case Opcodes.NEWARRAY -> {
-                        popStr(st);
-                        int at = ((org.objectweb.asm.tree.IntInsnNode) insn).operand;
-                        st.push(arrayOfType(atypeName(at)));
-                    }
-                    case Opcodes.ANEWARRAY -> {
-                        popStr(st);
-                        String d = ((org.objectweb.asm.tree.TypeInsnNode) insn).desc;
-                        st.push(arrayOfType(d.startsWith("[") ? d : "L" + d + ";"));
-                    }
-                    case Opcodes.MULTIANEWARRAY -> {
-                        int dims = ((org.objectweb.asm.tree.MultiANewArrayInsnNode) insn).dims;
-                        for (int k = 0; k < dims; k++) popStr(st);
-                        st.push(Ast.friendlyType(((org.objectweb.asm.tree.MultiANewArrayInsnNode) insn).desc));
-                    }
-                    case Opcodes.CHECKCAST -> {
-                        popStr(st);
-                        String d = ((org.objectweb.asm.tree.TypeInsnNode) insn).desc;
-                        st.push(Ast.friendlyType("L" + d + ";"));
-                    }
-                    case Opcodes.INSTANCEOF -> { popStr(st); st.push("boolean"); }
-                    case Opcodes.GETSTATIC -> {
-                        String d = ((FieldInsnNode) insn).desc;
-                        st.push(Ast.friendlyType(d));
-                    }
-                    case Opcodes.GETFIELD -> {
-                        popStr(st);
-                        String d = ((FieldInsnNode) insn).desc;
-                        st.push(Ast.friendlyType(d));
-                    }
-                    case Opcodes.PUTSTATIC -> popStr(st);
-                    case Opcodes.PUTFIELD -> { popStr(st); popStr(st); }
-                    case Opcodes.INVOKESTATIC, Opcodes.INVOKEVIRTUAL, Opcodes.INVOKESPECIAL,
-                         Opcodes.INVOKEINTERFACE -> {
-                        MethodInsnNode mi = (MethodInsnNode) insn;
-                        Type[] args = Type.getArgumentTypes(mi.desc);
-                        for (int k = 0; k < args.length; k++) popStr(st);
-                        if (mi.getOpcode() != Opcodes.INVOKESTATIC) popStr(st); // receiver
-                        Type ret = Type.getReturnType(mi.desc);
-                        if (ret.getSort() != Type.VOID) st.push(friendly(ret));
-                    }
-                    case Opcodes.INVOKEDYNAMIC -> {
-                        org.objectweb.asm.tree.InvokeDynamicInsnNode id =
-                                (org.objectweb.asm.tree.InvokeDynamicInsnNode) insn;
-                        Type[] args = Type.getArgumentTypes(id.desc);
-                        for (int k = 0; k < args.length; k++) popStr(st);
-                        Type ret = Type.getReturnType(id.desc);
-                        if (ret.getSort() != Type.VOID) st.push(friendly(ret));
-                    }
-                    case Opcodes.GOTO, Opcodes.IFEQ, Opcodes.IFNE, Opcodes.IFLT, Opcodes.IFGE,
-                         Opcodes.IFGT, Opcodes.IFLE, Opcodes.IF_ICMPEQ, Opcodes.IF_ICMPNE,
-                         Opcodes.IF_ICMPLT, Opcodes.IF_ICMPGE, Opcodes.IF_ICMPGT, Opcodes.IF_ICMPLE,
-                         Opcodes.IF_ACMPEQ, Opcodes.IF_ACMPNE, Opcodes.IFNULL, Opcodes.IFNONNULL,
-                         Opcodes.LOOKUPSWITCH, Opcodes.TABLESWITCH, Opcodes.JSR, Opcodes.RET,
-                         Opcodes.IRETURN, Opcodes.LRETURN, Opcodes.FRETURN, Opcodes.DRETURN,
-                         Opcodes.ARETURN, Opcodes.RETURN, Opcodes.ATHROW, Opcodes.MONITORENTER,
-                         Opcodes.MONITOREXIT, Opcodes.IINC -> {
-                        // управление/терминаторы: стек портится, но уже выведенные in[] оставляем
-                    }
-                    default -> { return; }
+        // лидеры блоков: первый, цели переходов, и инструкции после переходов/бросков
+        java.util.Set<AbstractInsnNode> leaders = new java.util.HashSet<>();
+        leaders.add(insns[0]);
+        for (int i = 0; i < insns.length; i++) {
+            AbstractInsnNode n = insns[i];
+            int op = n.getOpcode();
+            if (n instanceof JumpInsnNode j) {
+                if (op != Opcodes.GOTO) {
+                    int t = insns.length;
                 }
+                leaders.add(j.label);
+                if (op != Opcodes.GOTO) markNext(leaders, insns, i);
+            } else if (n instanceof org.objectweb.asm.tree.TableSwitchInsnNode ts) {
+                leaders.addAll(ts.labels);
+                leaders.add(ts.dflt);
+                markNext(leaders, insns, i);
+            } else if (n instanceof org.objectweb.asm.tree.LookupSwitchInsnNode ls) {
+                leaders.addAll(ls.labels);
+                leaders.add(ls.dflt);
+                markNext(leaders, insns, i);
+            } else if (isTerminatorOp(op)) {
+                markNext(leaders, insns, i);
             }
-        } catch (RuntimeException e) {
-            // стек испорчен: уже выведенные типы оставляем, дальше не ходим
-            return;
+        }
+        // сопоставление инстр -> номер блока; блок = лидер и последующие до след. лидера
+        java.util.List<java.util.List<AbstractInsnNode>> blocks = new java.util.ArrayList<>();
+        java.util.Map<AbstractInsnNode, Integer> insnToBlock = new java.util.HashMap<>();
+        java.util.List<AbstractInsnNode> cur = null;
+        for (int i = 0; i < insns.length; i++) {
+            if (leaders.contains(insns[i])) {
+                cur = new java.util.ArrayList<>();
+                blocks.add(cur);
+            }
+            if (cur != null) {
+                cur.add(insns[i]);
+                insnToBlock.put(insns[i], blocks.size() - 1);
+            }
+        }
+        int m = blocks.size();
+        // входные стеки блоков
+        java.util.Deque<String>[] inputs = new java.util.Deque[m];
+        boolean[] done = new boolean[m];
+        inputs[0] = new java.util.ArrayDeque<>();
+        java.util.ArrayDeque<Integer> work = new java.util.ArrayDeque<>();
+        work.add(0);
+        while (!work.isEmpty()) {
+            int b = work.poll();
+            if (done[b]) continue;
+            java.util.Deque<String> st = new java.util.ArrayDeque<>();
+            if (inputs[b] != null) st.addAll(inputs[b]);
+            // выполнить блок
+            boolean ok = true;
+            for (AbstractInsnNode insn : blocks.get(b)) {
+                ok = step(st, insn, out);
+                if (!ok) break;
+            }
+            done[b] = true;
+            if (!ok) continue; // блок нельзя разобрать; не распространяем дальше
+            // распространить выход в succ
+            AbstractInsnNode last = blocks.get(b).get(blocks.get(b).size() - 1);
+            if (last instanceof JumpInsnNode j && j.getOpcode() == Opcodes.GOTO) {
+                int t = insnToBlock.getOrDefault(j.label, -1);
+                if (t >= 0) inputs[t] = merge(inputs[t], st);
+                work.add(t);
+            } else if (last instanceof org.objectweb.asm.tree.TableSwitchInsnNode ts) {
+                java.util.HashSet<AbstractInsnNode> targets = new java.util.HashSet<>();
+                targets.addAll(ts.labels);
+                targets.add(ts.dflt);
+                for (AbstractInsnNode t2 : targets) {
+                    int t = insnToBlock.getOrDefault(t2, -1);
+                    if (t >= 0) { inputs[t] = merge(inputs[t], st); work.add(t); }
+                }
+            } else if (last instanceof org.objectweb.asm.tree.LookupSwitchInsnNode ls) {
+                java.util.HashSet<AbstractInsnNode> targets = new java.util.HashSet<>();
+                targets.addAll(ls.labels);
+                targets.add(ls.dflt);
+                for (AbstractInsnNode t2 : targets) {
+                    int t = insnToBlock.getOrDefault(t2, -1);
+                    if (t >= 0) { inputs[t] = merge(inputs[t], st); work.add(t); }
+                }
+            } else if (last instanceof JumpInsnNode jj) {
+                int t = insnToBlock.getOrDefault(jj.label, -1);
+                if (t >= 0) { inputs[t] = merge(inputs[t], st); work.add(t); }
+                int next = insnToBlock.getOrDefault(insns[Math.min(insns.length - 1, indexOf(insns, jj) + 1)], -1);
+                if (next >= 0 && next != t) { inputs[next] = merge(inputs[next], st); work.add(next); }
+            } else if (isTerminatorOp(last.getOpcode())) {
+                // return/throw на копию стека — ничего не распространяем
+            }
         }
     }
 
+    private static int indexOf(AbstractInsnNode[] arr, AbstractInsnNode target) {
+        for (int i = 0; i < arr.length; i++) if (arr[i] == target) return i;
+        return -1;
+    }
+
+    private static boolean isTerminatorOp(int op) {
+        return op == Opcodes.IRETURN || op == Opcodes.LRETURN || op == Opcodes.FRETURN
+                || op == Opcodes.DRETURN || op == Opcodes.ARETURN || op == Opcodes.RETURN
+                || op == Opcodes.ATHROW;
+    }
+
+    private static void markNext(java.util.Set<AbstractInsnNode> leaders, AbstractInsnNode[] insns, int i) {
+        if (i + 1 < insns.length) leaders.add(insns[i + 1]);
+    }
+
+    /** Слияние входных стеков блока: выравнивание по низу, джойн попарно. */
+    private static java.util.Deque<String> merge(java.util.Deque<String> a, java.util.Deque<String> b) {
+        if (a == null) {
+            java.util.Deque<String> r = new java.util.ArrayDeque<>();
+            r.addAll(b);
+            return r;
+        }
+        java.util.List<String> la = new java.util.ArrayList<>(a);
+        java.util.List<String> lb = new java.util.ArrayList<>(b);
+        int d = Math.min(la.size(), lb.size());
+        if (la.size() > d) la = la.subList(la.size() - d, la.size());
+        if (lb.size() > d) lb = lb.subList(lb.size() - d, lb.size());
+        java.util.ArrayDeque<String> r = new java.util.ArrayDeque<>();
+        for (int i = 0; i < d; i++) {
+            String x = la.get(i), y = lb.get(i);
+            if (x.equals(y)) {
+                if (i == d - 1) r.addLast(x); // верх — так же
+            }
+            r.addLast(java.util.Objects.equals(x, y) ? x : "Object");
+        }
+        // внимание: порядок — сохраняем исходный (низ->верх) побайтово
+        return r;
+    }
+
+    /** Один шаг машины. Возвращает false, если инструкцию нельзя обработать. */
+    private static boolean step(java.util.Deque<String> st, AbstractInsnNode insn, String[] out) {
+        int n = out.length;
+        int op = insn.getOpcode();
+        try {
+            switch (op) {
+                case -1, Opcodes.NOP -> { }
+                case Opcodes.ACONST_NULL -> st.push("Object");
+                case Opcodes.ICONST_M1, Opcodes.ICONST_0, Opcodes.ICONST_1, Opcodes.ICONST_2,
+                     Opcodes.ICONST_3, Opcodes.ICONST_4, Opcodes.ICONST_5,
+                     Opcodes.BIPUSH, Opcodes.SIPUSH, Opcodes.ARRAYLENGTH,
+                     Opcodes.IALOAD, Opcodes.LALOAD, Opcodes.FALOAD, Opcodes.DALOAD,
+                     Opcodes.BALOAD, Opcodes.CALOAD, Opcodes.SALOAD,
+                     Opcodes.IADD, Opcodes.ISUB, Opcodes.IMUL, Opcodes.IDIV, Opcodes.IREM,
+                     Opcodes.INEG, Opcodes.I2B, Opcodes.I2C, Opcodes.I2S,
+                     Opcodes.I2L, Opcodes.I2F, Opcodes.I2D,
+                     Opcodes.IAND, Opcodes.IOR, Opcodes.IXOR -> st.push("int");
+                case Opcodes.LCONST_0, Opcodes.LCONST_1,
+                     Opcodes.LADD, Opcodes.LSUB, Opcodes.LMUL, Opcodes.LDIV, Opcodes.LREM,
+                     Opcodes.LNEG, Opcodes.L2I, Opcodes.L2F, Opcodes.L2D,
+                     Opcodes.LAND, Opcodes.LOR, Opcodes.LXOR,
+                     Opcodes.LSHL, Opcodes.LSHR, Opcodes.LUSHR -> st.push("long");
+                case Opcodes.DCONST_0, Opcodes.DCONST_1, Opcodes.DADD, Opcodes.DSUB, Opcodes.DMUL,
+                     Opcodes.DDIV, Opcodes.DREM, Opcodes.DNEG, Opcodes.D2I, Opcodes.D2L,
+                     Opcodes.D2F -> st.push("double");
+                case Opcodes.FCONST_0, Opcodes.FCONST_1, Opcodes.FCONST_2,
+                     Opcodes.FADD, Opcodes.FSUB, Opcodes.FMUL, Opcodes.FDIV, Opcodes.FREM,
+                     Opcodes.FNEG, Opcodes.F2I, Opcodes.F2L, Opcodes.F2D -> st.push("float");
+                case Opcodes.LDC -> {
+                    Object c = ((LdcInsnNode) insn).cst;
+                    if (c instanceof Type t) st.push(friendly(t));
+                    else if (c instanceof Long) st.push("long");
+                    else if (c instanceof Integer) st.push("int");
+                    else if (c instanceof Float) st.push("float");
+                    else if (c instanceof Double) st.push("double");
+                    else st.push("String");
+                }
+                case Opcodes.ALOAD -> {
+                    int var = ((VarInsnNode) insn).var;
+                    st.push(var >= 0 && var < n && out[var] != null ? out[var] : "Object");
+                }
+                case Opcodes.ILOAD -> st.push("int");
+                case Opcodes.LLOAD -> st.push("long");
+                case Opcodes.FLOAD -> st.push("float");
+                case Opcodes.DLOAD -> st.push("double");
+                case Opcodes.ASTORE -> {
+                    int var = ((VarInsnNode) insn).var;
+                    String top = popStr(st);
+                    if (top != null && var >= 0 && var < n && isObjectType(out[var])) out[var] = top;
+                }
+                case Opcodes.ISTORE, Opcodes.LSTORE, Opcodes.FSTORE, Opcodes.DSTORE -> popStr(st);
+                case Opcodes.AALOAD -> {
+                    popStr(st);
+                    String arr = popStr(st);
+                    if (arr != null && arr.endsWith("[]")) st.push(arr.substring(0, arr.length() - 2));
+                    else st.push("Object");
+                }
+                case Opcodes.AASTORE, Opcodes.IASTORE, Opcodes.LASTORE, Opcodes.FASTORE,
+                     Opcodes.DASTORE, Opcodes.BASTORE, Opcodes.CASTORE, Opcodes.SASTORE -> {
+                    popStr(st); popStr(st); popStr(st);
+                }
+                case Opcodes.DUP -> st.push(st.peek());
+                case Opcodes.DUP_X1 -> { String a = popStr(st); String b = popStr(st); st.push(a); st.push(b); st.push(a); }
+                case Opcodes.POP -> popStr(st);
+                case Opcodes.POP2 -> { popStr(st); popStr(st); }
+                case Opcodes.NEW -> st.push(Ast.friendlyType("L" + ((TypeInsnNode) insn).desc + ";"));
+                case Opcodes.NEWARRAY -> {
+                    popStr(st);
+                    st.push(arrayOfType(atypeName(((IntInsnNode) insn).operand)));
+                }
+                case Opcodes.ANEWARRAY -> {
+                    popStr(st);
+                    String d = ((TypeInsnNode) insn).desc;
+                    st.push(arrayOfType(d.startsWith("[") ? d : "L" + d + ";"));
+                }
+                case Opcodes.MULTIANEWARRAY -> {
+                    int dims = ((MultiANewArrayInsnNode) insn).dims;
+                    for (int k = 0; k < dims; k++) popStr(st);
+                    st.push(Ast.friendlyType(((MultiANewArrayInsnNode) insn).desc));
+                }
+                case Opcodes.CHECKCAST -> {
+                    popStr(st);
+                    st.push(Ast.friendlyType("L" + ((TypeInsnNode) insn).desc + ";"));
+                }
+                case Opcodes.INSTANCEOF -> { popStr(st); st.push("boolean"); }
+                case Opcodes.GETSTATIC -> st.push(Ast.friendlyType(((FieldInsnNode) insn).desc));
+                case Opcodes.GETFIELD -> { popStr(st); st.push(Ast.friendlyType(((FieldInsnNode) insn).desc)); }
+                case Opcodes.PUTSTATIC -> popStr(st);
+                case Opcodes.PUTFIELD -> { popStr(st); popStr(st); }
+                case Opcodes.INVOKESTATIC, Opcodes.INVOKEVIRTUAL, Opcodes.INVOKESPECIAL,
+                     Opcodes.INVOKEINTERFACE -> {
+                    MethodInsnNode mi = (MethodInsnNode) insn;
+                    Type[] args = Type.getArgumentTypes(mi.desc);
+                    for (int k = 0; k < args.length; k++) popStr(st);
+                    if (mi.getOpcode() != Opcodes.INVOKESTATIC) popStr(st);
+                    Type ret = Type.getReturnType(mi.desc);
+                    if (ret.getSort() != Type.VOID) st.push(friendly(ret));
+                }
+                case Opcodes.INVOKEDYNAMIC -> {
+                    org.objectweb.asm.tree.InvokeDynamicInsnNode id =
+                            (org.objectweb.asm.tree.InvokeDynamicInsnNode) insn;
+                    Type[] args = Type.getArgumentTypes(id.desc);
+                    for (int k = 0; k < args.length; k++) popStr(st);
+                    Type ret = Type.getReturnType(id.desc);
+                    if (ret.getSort() != Type.VOID) st.push(friendly(ret));
+                }
+                case Opcodes.GOTO, Opcodes.IFEQ, Opcodes.IFNE, Opcodes.IFLT, Opcodes.IFGE,
+                     Opcodes.IFGT, Opcodes.IFLE, Opcodes.IF_ICMPEQ, Opcodes.IF_ICMPNE,
+                     Opcodes.IF_ICMPLT, Opcodes.IF_ICMPGE, Opcodes.IF_ICMPGT, Opcodes.IF_ICMPLE,
+                     Opcodes.IF_ACMPEQ, Opcodes.IF_ACMPNE, Opcodes.IFNULL, Opcodes.IFNONNULL,
+                     Opcodes.TABLESWITCH, Opcodes.LOOKUPSWITCH, Opcodes.IINC -> { }
+                case Opcodes.IRETURN, Opcodes.LRETURN, Opcodes.FRETURN, Opcodes.DRETURN,
+                     Opcodes.ARETURN, Opcodes.RETURN, Opcodes.ATHROW -> { }
+                case Opcodes.JSR, Opcodes.RET -> { return false; }
+                case Opcodes.MONITORENTER, Opcodes.MONITOREXIT -> { }
+                default -> { return false; }
+            }
+        } catch (RuntimeException e) {
+            return false;
+        }
+        return true;
+    }
     private static String popStr(java.util.Deque<String> st) {
         if (st.isEmpty()) return null;
         return st.pop();
