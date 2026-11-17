@@ -49,7 +49,8 @@ public final class StructureToAst {
     private String undecompilableReason;
     /** Эмиссии блоков по роли: normal-flow и catch-роль (handler). */
     private final java.util.Map<Integer, Integer> normalEmits = new java.util.HashMap<>();
-    private final java.util.Map<Integer, Integer> catchEmits = new java.util.HashMap<>();
+    /** Списки операторов по блокам — основа двухфазной эмиссии (phi-инъекции). */
+    private final java.util.Map<Integer, List<Ast.Stmt>> blockStmts = new java.util.HashMap<>();    private final java.util.Map<Integer, Integer> catchEmits = new java.util.HashMap<>();
 
     /** Диагностика прогона (сбрасывается Main). */
     public static final java.util.concurrent.atomic.AtomicInteger HANDLER_DUPLICATES =
@@ -1109,7 +1110,9 @@ public final class StructureToAst {
         BasicBlock bb = blocks.get(blockIndex);
         BytecodeToExpr emu = newEmu();
         List<AbstractInsnNode> all = new ArrayList<>(bb.getInstructions());
-        return emu.runBlock(all, false);
+        List<Ast.Stmt> stmts = emu.runBlock(all, false);
+        blockStmts.put(blockIndex, stmts);
+        return stmts;
     }
 
     /** Эмулятор с привязанным версионным резолвером слота 0 и признаком boolean-возврата. */
