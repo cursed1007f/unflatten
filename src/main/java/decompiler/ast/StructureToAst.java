@@ -1056,11 +1056,26 @@ public final class StructureToAst {
         if (dfltBlock != null) switchConsumed.add(dfltBlock);
 
         // СЃРѕР±РёСЂР°РµРј case-РІРµС‚РІРё (С‚РµР»Р° вЂ” Р±Р»РѕРєРё СЃ return)
+        // Несколько ключей могут делить одно тело (javac: case 1: case 2: body).
+        // Тело эмитим ровно один раз — для последнего ключа группы, остальные
+        // получают пустое тело (fallthrough). Иначе блок с сайд-эффектом
+        // эмитится на каждый ключ и ловится DOUBLE_EMIT.
+        java.util.Map<Integer, Integer> occurrences = new java.util.HashMap<>();
+        for (int cb : caseBlocks) {
+            if (cb >= 0 && cb < blocks.size()) occurrences.merge(cb, 1, Integer::sum);
+        }
+        if (dfltBlock != null && occurrences.containsKey(dfltBlock)) {
+            // default делит тело с case: печатать его пустым нельзя (уйдёт
+            // fallthrough не туда), дублировать тело — тоже.
+            throw new UndecompilableException(
+                    UndecompilableException.Kind.OTHER, "switch default shares case body");
+        }
         List<Ast.Case> cases = new ArrayList<>();
         for (int i = 0; i < keys.size(); i++) {
             int cb = caseBlocks.get(i);
             if (cb < 0 || cb >= blocks.size()) continue;
-            List<Ast.Stmt> body = blockToStmt(cb);
+            int left = occurrences.merge(cb, -1, Integer::sum);
+            List<Ast.Stmt> body = left == 0 ? blockToStmt(cb) : new ArrayList<>();
             cases.add(new Ast.Case(keys.get(i), body));
         }
         List<Ast.Stmt> dfltBody = dfltBlock != null && dfltBlock < blocks.size()

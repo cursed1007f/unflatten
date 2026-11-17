@@ -1,8 +1,8 @@
-# Следующая сессия: S2/S4, доказательство return 0, затем javac-гейт и entry-stack
+# Следующая сессия: double emit в switch, LinkBootstrap, javac-гейт и фикстуры
 
 Статус: M1–M8, P4, S1, S3 закрыты. B1–B3 выполнены: инварианты на
 exception-замыкании, матрица s11→s15 с clinit сошлась до единицы, все три jar
-пересн­яты на текущей сборке. Гейт можно начинать после S2 (вложенные if).
+пересн­яты на текущей сборке. Гейт разблокирован: S2 уходит в набор фикстур, S4 — disclose, S6 закрыт по provenance.
 
 ## Сделано (M-раунд)
 
@@ -37,20 +37,25 @@ exception-замыкании, матрица s11→s15 с clinit сошлась 
 - **S3.** `pendingNew` без `<init>` на выходе блока — bail, если слот где-либо
   читается (`withSlotReads(slotReadAnywhere)`); мёртвые записи отбрасываются.
   19 отказов на legit, 11 из них раньше «выживали» с arg-less `new`.
+- **Switch-дедуп.** Несколько ключей на одно тело (`TABLESWITCH L24 L24 L32 L32`)
+  больше не эмитят тело на каждый ключ: тело — у последнего ключа группы,
+  остальные пустые (fallthrough). Double emit 2 → 0 (`_Pk`, `WWq` восстановлены).
+  `default`, делящий тело с case, — явный bail `switch default shares case body`
+  (у `k(BI)I`, `_jaixjV(BI)I` причина сменилась с underflow, новых потерь нет).
 
 ## Baseline `slash-obf-legit.jar` (P4 + S1 + S3)
 
-`undecompilable = 475` из 1942 (24.5%), survived = 1467, class-level errors = 0.
+`undecompilable = 473` из 1942 (24.4%), survived = 1469, class-level errors = 0.
 Балл качества: **108**.
 
 | Причина | Кол-во |
 |---|---|
-| underflow | 205 |
+| underflow | 203 |
 | lost block | 22 |
-| double emit | 2 |
+| double emit | 0 |
 | dead code | 0 |
 | missing return | 0 |
-| other | 246 |
+| other | 248 |
 
 `other` включает 19 `pending new without <init>` (S3; 11 методов раньше выживали
 с arg-less `new`). diag: `rethrow-dropped=744`, `rethrow-slot: -2=744 gte0=0 -1=26`,
@@ -84,14 +89,19 @@ survived→bail **49**, net **66** = 1487−1421 ✓.
 
 ## Очередь
 
-1. **S2.** ASM-репро «assign + IF во вложенной ветви» + инвариант «prelude уже
-   эмитирован либо bail».
-2. **S4.** record equals для float/double компонентов — disclose/поправить.
-3. **return 0 (497, SlashW)**: приложить 5 методов + байткод (сейчас найден
-   только класс `BytecodeVM/GxgJ`).
-4. **Double emit в switch** — дедуп case-блоков/регионы, вернуть 0.
-5. **LinkBootstrap.connect** (SlashW) — разобрать bsmArgs/Handle, восстановить вызов.
-6. **javac-гейт + идемпотентность**, ASM-фикстуры, дизайн-нота entry-stack.
+1. **Double emit в switch** — `_Pk`/`WWq`, дедуп case-блоков/регионы, вернуть 0.
+2. **LinkBootstrap.connect** (SlashW) — разобрать bsmArgs/Handle, восстановить вызов.
+3. **javac-гейт + идемпотентность** (ин-процессный JavaCompiler, фильтр
+   `cant.resolve`/`doesnt.exist`, категории missing return/unreachable/definite
+   assignment; декомпил→рекомпил→декомпил→AST-diff).
+4. **ASM-фикстуры** (там же S2): opaque-true ромб с сайд-эффектом в else,
+   PUTFIELD на локале, cat-2 DUP2, nested try в handler'е, loop-header как entry,
+   switch fallthrough, **assign+IF во вложенной ветви**. Если фикстура S2 не
+   воспроизводит потерю prelude — recoverer корректен, инвариант не нужен.
+5. **S4 (disclose, не блокер).** record `equals` для float/double компонентов
+   печатается через `Objects.equals`, а не `Float.compare` — семантика отличается
+   для NaN/±0.0; зафиксировать в доках.
+6. **Дизайн-нота entry-stack** после фикстур.
 
 ## Проверка
 
