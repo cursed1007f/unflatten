@@ -147,6 +147,13 @@ public final class JavaClassPrinter {
     private static String staticInitBlock(MethodNode mn, StringDecryptor decryptor, String classOwner,
                                           ClassHierarchy hierarchy) {
         String body = stripTrailingReturn(bodyOf(mn, decryptor, classOwner, hierarchy));
+        // Хвостовой return; эквивалентен выходу из инициализатора и снят.
+        // return в середине clinit (обфускация) снимать нельзя — это реальный
+        // выход, после которого код не должен исполняться: честный отказ.
+        if (body.contains("return;")) {
+            throw new UndecompilableException(
+                    UndecompilableException.Kind.OTHER, "return inside <clinit>");
+        }
         return "    static {\n" + body + "    }\n";
     }
 
