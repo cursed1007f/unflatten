@@ -1158,10 +1158,7 @@ public final class StructureToAst {
                 List<Ast.Expr> r = blockResults.get(p.index());
                 if (r == null || r.size() <= s.pos) {
                     throw new UndecompilableException(
-                            UndecompilableException.Kind.JOIN_DEPTH,
-                            "phi without predecessor value: b=" + s.block + " pos=" + s.pos
-                                    + " preds=" + preds.stream().map(p -> p.index() + ":"
-                                    + (blockResults.get(p.index()) == null ? -1 : blockResults.get(p.index()).size())).toList());
+                            UndecompilableException.Kind.JOIN_DEPTH, "phi without predecessor value");
                 }
                 vals.add(r.get(s.pos));
             }
