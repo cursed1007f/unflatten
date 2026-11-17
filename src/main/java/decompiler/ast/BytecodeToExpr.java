@@ -326,6 +326,8 @@ public final class BytecodeToExpr {
             // --- вызовы ---
             case Opcodes.INVOKEVIRTUAL, Opcodes.INVOKESPECIAL, Opcodes.INVOKESTATIC, Opcodes.INVOKEINTERFACE ->
                     doCall((MethodInsnNode) n);
+            case Opcodes.INVOKEDYNAMIC ->
+                    consumeIndy((org.objectweb.asm.tree.InvokeDynamicInsnNode) n);
             // --- new + dup + init ---
             case Opcodes.NEW -> {
                 TypeInsnNode t = (TypeInsnNode) n;
@@ -485,6 +487,86 @@ public final class BytecodeToExpr {
                 // незнакомые: потребляем (не даём тихому падению)
             }
         }
+    }
+
+    /**
+     * invokedynamic: StringConcatFactory -> конкатенация строк, LambdaMetafactory ->
+     * ссылка на метод (best effort), прочие bootstrap (ObjectMethods и т.п.) —
+     * типизированная заглушка, чтобы не ломать стек.
+     */
+    private void consumeIndy(org.objectweb.asm.tree.InvokeDynamicInsnNode id) {
+        String bsmName = id.bsm != null ? id.bsm.getName() : "";
+        int argc = argsCount(id.desc);
+        List<Ast.Expr> args = new ArrayList<>();
+        for (int i = 0; i < argc; i++) args.add(0, pop());
+
+        // StringConcatFactory: recipe + аргументы -> "a" + x + b ...
+        if ("makeConcatWithConstants".equals(bsmName) && id.bsmArgs.length >= 1
+                && id.bsmArgs[0] instanceof String recipe) {
+            stack.push(buildConcat(recipe, id.bsmArgs, args));
+            return;
+        }
+        // LambdaMetafactory: ссылка на метод из хендла-реализации
+        if ("metafactory".equals(bsmName) && id.bsmArgs.length >= 2
+                && id.bsmArgs[1] instanceof org.objectweb.asm.Handle h) {
+            stack.push(methodRef(h));
+            return;
+        }
+        // Прочие bootstrap (ObjectMethods::bootstrap и т.п.) — типизированная заглушка.
+        String ret = id.desc.substring(id.desc.indexOf(')') + 1);
+        Ast.Expr ph = placeholderFor(ret);
+        if (ph != null) stack.push(ph);
+    }
+
+    /** Собирает выражение конкатенации из StringConcat-рецепта и аргументов. */
+    private Ast.Expr buildConcat(String recipe, Object[] bsmArgs, List<Ast.Expr> dynArgs) {
+        List<Ast.Expr> parts = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        int dyn = 0, cst = 1;
+        for (int i = 0; i < recipe.length(); i++) {
+            char ch = recipe.charAt(i);
+            if (ch == '\1') { // \u0001 — очередной динамический аргумент
+                if (cur.length() > 0) { parts.add(new Ast.Literal(cur.toString())); cur.setLength(0); }
+                if (dyn < dynArgs.size()) parts.add(dynArgs.get(dyn++));
+            } else if (ch == '\2') { // \u0002 — очередная константа из bsmArgs
+                if (cur.length() > 0) { parts.add(new Ast.Literal(cur.toString())); cur.setLength(0); }
+                if (cst < bsmArgs.length && bsmArgs[cst] != null) parts.add(new Ast.Literal(bsmArgs[cst]));
+                cst++;
+            } else {
+                cur.append(ch);
+            }
+        }
+        if (cur.length() > 0) parts.add(new Ast.Literal(cur.toString()));
+        if (parts.isEmpty()) return new Ast.Literal("");
+        Ast.Expr e = parts.get(0);
+        for (int i = 1; i < parts.size(); i++) e = new Ast.Binary("+", e, parts.get(i));
+        return e;
+    }
+
+    /** Ссылка на метод (для LambdaMetafactory): Owner::m, this::m, Owner::new. */
+    private Ast.Expr methodRef(org.objectweb.asm.Handle h) {
+        String owner = Ast.friendlyType("L" + h.getOwner() + ";");
+        String nm = h.getName();
+        int tag = h.getTag();
+        if ("<init>".equals(nm) || tag == Opcodes.H_NEWINVOKESPECIAL) {
+            return new Ast.Var(owner + "::new");
+        }
+        if (tag == Opcodes.H_INVOKESTATIC) return new Ast.Var(owner + "::" + nm);
+        return new Ast.Var("this::" + nm); // виртуальный/специальный — обычно this::m
+    }
+
+    /** Типизированная заглушка для неизвестного invokedynamic по коду возврата. */
+    private static Ast.Expr placeholderFor(String ret) {
+        if (ret.isEmpty()) return null;
+        return switch (ret.charAt(0)) {
+            case 'V' -> null;
+            case 'Z' -> new Ast.Literal(false);
+            case 'B', 'C', 'S', 'I' -> new Ast.Literal(0);
+            case 'J' -> new Ast.Literal(0L);
+            case 'F' -> new Ast.Literal(0.0f);
+            case 'D' -> new Ast.Literal(0.0d);
+            default -> new Ast.NullLit();
+        };
     }
 
     private void doCall(MethodInsnNode m) {
