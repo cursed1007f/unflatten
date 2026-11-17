@@ -186,3 +186,14 @@ lost block: 13 BB + 2 handler = 15 (s40) -> 16 BB + 2 handler = 18 (s41); +3 р�
 **Сделано:** `normalizeBooleanLiterals` в `StructureToAst` после объявления локалов. Правила: (1) temp, которому присваивается boolean-локал (`Assign(Var boolVar, Var temp)`), объявляется boolean; (2) в boolean-контексте литералы 0/1 печатаются `false`/`true`. Обход по Block/If/While/Switch/TryCatch с заменой элементов списков на месте.
 
 **Эффект:** `prob.found.req` 197 -> 166, bad 115 -> 113. `IrG\`: было 3 ошибки, стало 2 (221, 230). boolean-объявлений 70, `= true/false` 260. Метрики: 133/1942, балл 381; тесты зелёные; матрица s54->s55 — 0 переходов.
+## Сессия s57 — массивы из вызовов/полей/cast (закоммичено 33aa1dd)
+
+**Найдено:** `array.req.but.found` — локалы-массивы объявлялись `Object`, когда значение приходило из `INVOKE` (`String[] s = str.split(...)`), поля, `CHECKCAST` или другого слота; `classifyArrayStores` знал только `NEWARRAY`.
+
+**Сделано:** `arrayTypeOf` расширен: `MethodInsnNode` (returnType ARRAY), `FieldInsnNode`, `LDC` типа-массива, `CHECKCAST`, `ALOAD` с уже известным типом массива; 3 защиты от RuntimeException.
+
+**ВАЖНО (артефакт):** промежуточный прогон без защиты дал `undecompilable` 133 -> 75, но это ложь: 32 класса падали в принтере, их методы не декомпилировались, а считались survived (`class-level errors: 32`). С защитой честные 133/1942, `class-level errors: 0`.
+
+**Эффект:** `array.req.but.found` 44 -> 5; `oVar4` стал `String[]`. Остаток — phi-темпы: `java.lang.Object t10_0; oVar4 = t10_0;` (тип temps берётся из StackValue, а invoke-результат там без типа массива).
+
+**Метрики s57:** 133/1942, survived 1809, underflow 5, lost block 18, балл 381; три jar идентичны; матрица s55->s57 — 0 переходов; гейт bad 113, real 74.
