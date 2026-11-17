@@ -268,6 +268,7 @@ public final class Main {
         final int[] methodsWithCode = {0};
         final int[] gateClasses = {0};
         final int[] gateBad = {0};
+        final int[] gateReal = {0};
         final java.util.Map<String, Integer> gateCodes = new java.util.TreeMap<>();
         // Сброс диагностики прогона (статическая, чтобы не тащить счётчики через API).
         decompiler.ast.StructureToAst.HANDLER_DUPLICATES.set(0);
@@ -297,6 +298,8 @@ public final class Main {
                             decompiler.ast.JavacGate.check(display, java, jar.toString());
                     if (!gr.ok()) {
                         gateBad[0]++;
+                        if (!gr.realCodes().isEmpty()) gateReal[0]++;
+                        System.err.println("gate-bad: " + display + " " + gr.samples());
                         for (String gc : gr.codes()) gateCodes.merge(gc, 1, Integer::sum);
                     }
                 } else {
@@ -317,7 +320,7 @@ public final class Main {
         q.classErrors = classErrors[0];
         if (gateMode) {
             System.err.println("gate: classes=" + gateClasses[0] + " bad=" + gateBad[0]
-                    + " codes=" + gateCodes);
+                    + " real=" + gateReal[0] + " codes=" + gateCodes);
         }
         System.err.println(q.summary());
         System.err.println(String.format("methods: total=%d survived=%d undecompilable=%d",

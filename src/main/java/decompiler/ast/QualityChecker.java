@@ -119,6 +119,9 @@ public final class QualityChecker {
             sb.append(String.format("class-level errors:  %d%n", classErrors));
             sb.append(String.format("this.<init>:         %d%n", ctorInit));
             sb.append(String.format("/* ? */:             %d%n", questionMark));
+            sb.append(String.format("score parts: ctx=%d idx=%d dumb=%d cast=%d new=%d dead=%d ret0=%d ctor=%d qm=%d%n",
+                    contextThisCompare, thisIndex, dumbThrow, castObject, newObject,
+                    deadIVarConst, returnZero, ctorInit, questionMark));
             sb.append(String.format("БАЛЛ качества:       %d (ниже = лучше)%n", score()));
             return sb.toString();
         }
@@ -161,9 +164,10 @@ public final class QualityChecker {
     private static final Pattern NEW_OBJECT =
             Pattern.compile("new\\s+Object\\s*\\(");
 
-    // iVarN = 0/1/... (мёртвая константа, спилл)
+    // <var>N = <константа>; — мёртвая константа-спилл любого типа, не только iVar
+    // (lVar/fVar/dVar/oVar тоже пишутся и не читаются).
     private static final Pattern DEAD_IVAR_CONST =
-            Pattern.compile("\\biVar\\d+\\s*=\\s*-?\\d+;");
+            Pattern.compile("\\b(iVar|lVar|fVar|dVar|oVar)\\d+\\s*=\\s*-?\\d+(?:\\.\\d*)?[LlFfDd]?;");
 
     // return 0; return 0L; return 0.0;
     private static final Pattern RETURN_ZERO =
