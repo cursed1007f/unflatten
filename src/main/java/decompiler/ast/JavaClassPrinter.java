@@ -47,6 +47,10 @@ public final class JavaClassPrinter {
         StringBuilder sb = new StringBuilder();
         // заголовок
         sb.append(classDeclaration(cn)).append(" {\n\n");
+        // enum без напечатанных констант: JLS 8.9 требует ';' перед членами тела
+        if ((cn.access & Opcodes.ACC_ENUM) != 0) {
+            sb.append("    ;\n\n");
+        }
 
         // поля
         if (cn.fields != null) {
