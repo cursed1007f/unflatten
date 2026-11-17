@@ -107,6 +107,7 @@ public final class TypeInference {
         // преобладает, чтобы слот 0, куда писали ISTORE, не рендерился как "this"
         // (иначе выходит "new double[this]", "iVar29 >= this").
         classifyArrayStores(mn, out);
+        classifyArrayElements(mn, out);
         classifyPrimitiveStores(mn, out);
         refineBooleans(mn, out);
         applyUsageBasedObjectTypes(mn, isStatic, out, hierarchy);
@@ -300,6 +301,32 @@ public final class TypeInference {
         return null;
     }
 
+    /** Слот, которому присваивают элемент массива T[], получает тип T. */
+    private static void classifyArrayElements(MethodNode mn, String[] out) {
+        AbstractInsnNode[] insns = mn.instructions.toArray();
+        for (int round = 0; round < 2; round++) {
+            for (int i = 1; i + 1 < insns.length; i++) {
+                if (insns[i].getOpcode() != Opcodes.AALOAD) continue;
+                VarInsnNode arr = null;
+                for (int k = i - 1; k >= 0 && k >= i - 4; k--) {
+                    if (insns[k] instanceof VarInsnNode cand && cand.getOpcode() == Opcodes.ALOAD) {
+                        arr = cand;
+                        break;
+                    }
+                }
+                if (arr == null) continue;
+                if (!(insns[i + 1] instanceof VarInsnNode st && st.getOpcode() == Opcodes.ASTORE)) continue;
+                int a = arr.var;
+                int d = st.var;
+                if (a < 0 || d < 0 || a >= out.length || d >= out.length) continue;
+                String at = out[a];
+                if (at == null || !at.endsWith("[]")) continue;
+                String elem = at.substring(0, at.length() - 2);
+                if (elem.isEmpty()) continue;
+                if (isObjectType(out[d])) out[d] = elem;
+            }
+        }
+    }
     private static boolean isObjectType(String t) {
         return "Object".equals(t) || "java.lang.Object".equals(t);
     }
