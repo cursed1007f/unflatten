@@ -56,11 +56,26 @@ public final class StructureToAst {
             new java.util.concurrent.atomic.AtomicInteger();
     public static final java.util.concurrent.atomic.AtomicInteger EMPTY_ROOTS =
             new java.util.concurrent.atomic.AtomicInteger();
+    /** Методы с пустым корнем структуры (для диагностики). */
+    public static final java.util.List<String> EMPTY_ROOT_METHODS =
+            java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+    /** Разбивка multi-block try по rethrowSlot: -2 / >=0 / -1. */
+    public static final java.util.concurrent.atomic.AtomicInteger RETHROW_SLOT_MINUS2 =
+            new java.util.concurrent.atomic.AtomicInteger();
+    public static final java.util.concurrent.atomic.AtomicInteger RETHROW_SLOT_GTE0 =
+            new java.util.concurrent.atomic.AtomicInteger();
+    public static final java.util.concurrent.atomic.AtomicInteger RETHROW_SLOT_MINUS1 =
+            new java.util.concurrent.atomic.AtomicInteger();
     public static final java.util.concurrent.atomic.AtomicInteger PRUNED_STATEMENTS =
             new java.util.concurrent.atomic.AtomicInteger();
     public static final java.util.concurrent.atomic.AtomicInteger PRUNED_METHODS =
             new java.util.concurrent.atomic.AtomicInteger();
     public static final java.util.concurrent.atomic.AtomicInteger RETHROW_DROPPED =
+            new java.util.concurrent.atomic.AtomicInteger();
+    public static final java.util.concurrent.atomic.AtomicInteger CONST_FOLDED =
+            new java.util.concurrent.atomic.AtomicInteger();
+    /** Удалённые DeadStores-присваивания (общий счётчик для отчёта). */
+    public static final java.util.concurrent.atomic.AtomicInteger DEAD_STORES =
             new java.util.concurrent.atomic.AtomicInteger();
 
     /** Handler'ы, легально снятые (пустой try / чистый rethrow), с причиной. */
@@ -134,7 +149,10 @@ public final class StructureToAst {
                 break;
             }
         }
-        if (!hasRoot) EMPTY_ROOTS.incrementAndGet();
+        if (!hasRoot) {
+            EMPTY_ROOTS.incrementAndGet();
+            EMPTY_ROOT_METHODS.add(classOwner + "." + method.name + method.desc);
+        }
         this.decryptor = decryptor;
         this.hierarchy = hierarchy;
         this.classOwner = classOwner;
@@ -186,23 +204,35 @@ public final class StructureToAst {
      * двойная эмиссия — тот же баг с другой стороны.
      */
     private void verifyEmittedBlocks() {
-        java.util.Set<Integer> reachable = reachableBlocks();
+        // Exception-замыкание обязательно: handler, достижимый только из
+        // catch-ребра, иначе не проверяется и теряется молча.
+        java.util.Set<Integer> reachable = reachableWithHandlers();
+        java.util.Set<Integer> normalReach = reachableBlocks();
         for (BasicBlock b : blocks) {
             int idx = b.index();
             int normal = normalEmits.getOrDefault(idx, 0);
             int catchCnt = catchEmits.getOrDefault(idx, 0);
             if (catchCnt > 1) HANDLER_DUPLICATES.addAndGet(catchCnt - 1);
             if (!reachable.contains(idx)) continue;
-            if (normal == 0) {
-                // Достижимый normal-flow блок не эмитирован нормально: либо потерян,
-                // либо (дыра обфускатора) в него прыгают normal-flow'ом в handler —
-                // тогда одного catch-эмита недостаточно.
-                throw new UndecompilableException(
-                        UndecompilableException.Kind.LOST_BLOCK, "BB" + idx);
-            }
             if (normal > 1 && hasSideEffect(b)) {
                 throw new UndecompilableException(
                         UndecompilableException.Kind.DOUBLE_EMIT, "BB" + idx);
+            }
+            if (normalReach.contains(idx)) {
+                if (normal == 0) {
+                    // Достижимый normal-flow блок не эмитирован нормально: либо потерян,
+                    // либо (дыра обфускатора) в него прыгают normal-flow'ом в handler —
+                    // тогда одного catch-эмита недостаточно.
+                    throw new UndecompilableException(
+                            UndecompilableException.Kind.LOST_BLOCK, "BB" + idx);
+                }
+            } else if (catchCnt == 0 && !droppedHandlers.contains(idx)) {
+                // Достижим только через exception: закрывается catch-эмитом или
+                // легальным снятием (пустой try/чистый rethrow). Иначе catch-код
+                // исчез молча.
+                throw new UndecompilableException(
+                        UndecompilableException.Kind.LOST_BLOCK,
+                        "handler BB" + idx + " emitted without catch");
             }
         }
     }
@@ -234,11 +264,17 @@ public final class StructureToAst {
      * Hard invariant (non-void): из entry нет пути к «выходу без значения».
      * Ловит missing return statement до javac.
      */
+    /**
+     * Hard invariant (non-void): из entry нет пути к «выходу без значения».
+     * Ловит missing return statement до javac. Пути через catch-ребро тоже
+     * проверяются: handler — такой же путь исполнения.
+     */
     private void verifyAllPathsTerminate() {
         String ret = method.desc.substring(method.desc.indexOf(')') + 1);
         if ("V".equals(ret)) return;
-        for (int idx : reachableBlocks()) {
+        for (int idx : reachableWithHandlers()) {
             BasicBlock b = blocks.get(idx);
+            if (!hasRealInstruction(b)) continue; // пустой label-блок — не точка выхода
             if (b.getSuccessors().isEmpty() && !terminatesExecution(b)) {
                 throw new UndecompilableException(
                         UndecompilableException.Kind.MISSING_RETURN, "BB" + idx);
@@ -246,11 +282,25 @@ public final class StructureToAst {
         }
     }
 
+    /** Есть ли в блоке настоящая инструкция (не только label/line/frame). */
+    private static boolean hasRealInstruction(BasicBlock b) {
+        for (AbstractInsnNode n : b.getInstructions()) {
+            if (n.getOpcode() >= 0) return true;
+        }
+        return false;
+    }
+
     private static boolean terminatesExecution(BasicBlock b) {
-        AbstractInsnNode term = b.getTerminator();
-        if (term == null) return false;
-        int op = term.getOpcode();
-        return (op >= Opcodes.IRETURN && op <= Opcodes.RETURN) || op == Opcodes.ATHROW;
+        // Терминатор блока может быть хвостовым label/frame после return/throw —
+        // getTerminator() вернёт их, и возврат «потеряется». Ищем последнюю
+        // настоящую инструкцию.
+        List<AbstractInsnNode> insns = b.getInstructions();
+        for (int i = insns.size() - 1; i >= 0; i--) {
+            int op = insns.get(i).getOpcode();
+            if (op < 0) continue;
+            return (op >= Opcodes.IRETURN && op <= Opcodes.RETURN) || op == Opcodes.ATHROW;
+        }
+        return false;
     }
 
     /**
@@ -292,7 +342,8 @@ public final class StructureToAst {
         if (s instanceof Ast.VarDecl) return true;
         if (s instanceof Ast.Return r) return isPureExpr(r.value());
         if (s instanceof Ast.Assign a) {
-            return isLocalName(a.target().name()) && isPureExpr(a.value());
+            return a.target() instanceof Ast.Var tv
+                    && isLocalName(tv.name()) && isPureExpr(a.value());
         }
         if (s instanceof Ast.ExprStmt es) return isPureExpr(es.expr());
         return false;
@@ -503,6 +554,31 @@ public final class StructureToAst {
         return seen;
     }
 
+    private static void restoreCounts(java.util.Map<Integer, Integer> m,
+                                      java.util.Map<Integer, Integer> snap) {
+        m.clear();
+        m.putAll(snap);
+    }
+
+    private static void addDelta(java.util.Map<Integer, Integer> dst,
+                                 java.util.Map<Integer, Integer> snap,
+                                 java.util.Map<Integer, Integer> base) {
+        for (var e : snap.entrySet()) {
+            int d = e.getValue() - base.getOrDefault(e.getKey(), 0);
+            if (d > 0) dst.merge(e.getKey(), d, Integer::sum);
+        }
+    }
+
+    private static void restoreSet(java.util.Set<Integer> s, java.util.Set<Integer> snap) {
+        s.clear();
+        s.addAll(snap);
+    }
+
+    private static void addSetDelta(java.util.Set<Integer> dst, java.util.Set<Integer> snap,
+                                    java.util.Set<Integer> base) {
+        for (int v : snap) if (!base.contains(v)) dst.add(v);
+    }
+
     /**
      * Hard invariant: у каждого достижимого try-start'а handler обязан быть
      * покрыт — эмитирован как catch, легально снят (пустой try/чистый rethrow)
@@ -517,7 +593,8 @@ public final class StructureToAst {
             if (!reachable.contains(start)) continue;
             if (catchEmits.containsKey(handler)) continue;
             if (droppedHandlers.contains(handler)) continue;
-            if (normalEmits.getOrDefault(handler, 0) > 0) continue;
+            // normal-эмиссия handler'а НЕ закрывает try: catch-структуры нет,
+            // исключение уйдёт мимо. Handler обязан быть catch-эмитом или снят.
             throw new UndecompilableException(
                     UndecompilableException.Kind.LOST_BLOCK, "uncovered handler BB" + handler);
         }
@@ -540,7 +617,7 @@ public final class StructureToAst {
         // Гарантия валидного Java: non-void метод, в котором восстановитель структуры
         // потерял return (diamond-тернарники и т.п.), получает завершающий return <default>.
         String ret = method.desc.substring(method.desc.indexOf(')') + 1);
-        if (!"V".equals(ret) && !containsReturn(res) && !endsWithThrow(res)) {
+        if (!"V".equals(ret) && !containsReturn(res) && !cannotCompleteNormally(res)) {
             // Раньше здесь фабриковался return 0/null. Теперь — явный отказ:
             // литерал обязан иметь байткодный provenance.
             throw new UndecompilableException(
@@ -648,6 +725,32 @@ public final class StructureToAst {
         return last instanceof Ast.ExprStmt es && es.expr() instanceof Ast.Call c && "throw".equals(c.name());
     }
 
+    /**
+     * Не может ли поток исполнения дойти до конца списка. Нужен для проверки
+     * non-void метода без return: метод, все пути которого завершаются throw
+     * (в т.ч. try/catch с throw в обеих ветвях), компилируется без return.
+     */
+    private static boolean cannotCompleteNormally(List<Ast.Stmt> stmts) {
+        if (stmts == null || stmts.isEmpty()) return false;
+        return cannotCompleteNormally(stmts.get(stmts.size() - 1));
+    }
+
+    private static boolean cannotCompleteNormally(Ast.Stmt s) {
+        if (s instanceof Ast.Return) return true;
+        if (s instanceof Ast.ExprStmt es && es.expr() instanceof Ast.Call c
+                && "throw".equals(c.name())) {
+            return true;
+        }
+        if (s instanceof Ast.If i) {
+            return cannotCompleteNormally(i.thenBranch()) && cannotCompleteNormally(i.elseBranch());
+        }
+        if (s instanceof Ast.Block b) return cannotCompleteNormally(b.body());
+        if (s instanceof Ast.TryCatch tc) {
+            return cannotCompleteNormally(tc.tryBody()) && cannotCompleteNormally(tc.catchBody());
+        }
+        return false;
+    }
+
     private void convertNode(StructureNode node, List<Ast.Stmt> out) {
         switch (node.kind()) {
             case SEQUENCE -> {
@@ -681,6 +784,10 @@ public final class StructureToAst {
                             UndecompilableException.Kind.OTHER, "loop header prelude");
                 }
                 normalEmits.merge(header, 1, Integer::sum);
+                java.util.Map<Integer, Integer> nBefore = new java.util.HashMap<>(normalEmits);
+                java.util.Map<Integer, Integer> cBefore = new java.util.HashMap<>(catchEmits);
+                java.util.Set<Integer> dBefore = new java.util.HashSet<>(droppedHandlers);
+                java.util.Set<Integer> sBefore = new java.util.HashSet<>(switchConsumed);
                 List<Ast.Stmt> body = new ArrayList<>();
                 for (StructureNode c : node.children()) {
                     if (outTerminated(body)) break; // недостижимые после return/throw узлы тела цикла
@@ -690,8 +797,17 @@ public final class StructureToAst {
                 // while (1*1+1%2 != 0) -> while(true); while(false) -> тело мёртвое, не эмитим.
                 Object cv = Ast.constValue(cond);
                 if (cv instanceof Boolean b) {
-                    if (b) out.add(new Ast.While(sourced(new Ast.Literal(true)), body));
-                    // else: всегда-ложь — цикл не выполняется
+                    CONST_FOLDED.incrementAndGet();
+                    if (b) {
+                        out.add(new Ast.While(sourced(new Ast.Literal(true)), body));
+                    } else {
+                        // while(false): тело мёртвое — откатываем его счётчики
+                        // и съеденные handler'ы/switch-блоки.
+                        restoreCounts(normalEmits, nBefore);
+                        restoreCounts(catchEmits, cBefore);
+                        restoreSet(droppedHandlers, dBefore);
+                        restoreSet(switchConsumed, sBefore);
+                    }
                 } else {
                     out.add(new Ast.While(cond, body));
                 }
@@ -699,8 +815,24 @@ public final class StructureToAst {
             case IF_ELSE -> {
                 int condIdx = node.ifCondIndex();
                 Ast.Expr cond = condFrom(condIdx);
+                java.util.Map<Integer, Integer> nBefore = new java.util.HashMap<>(normalEmits);
+                java.util.Map<Integer, Integer> cBefore = new java.util.HashMap<>(catchEmits);
+                java.util.Set<Integer> dBefore = new java.util.HashSet<>(droppedHandlers);
+                java.util.Set<Integer> sBefore = new java.util.HashSet<>(switchConsumed);
                 List<Ast.Stmt> thenSt = node.thenBranch() != null ? nodeToStmts(node.thenBranch()) : new ArrayList<>();
+                java.util.Map<Integer, Integer> nThen = new java.util.HashMap<>(normalEmits);
+                java.util.Map<Integer, Integer> cThen = new java.util.HashMap<>(catchEmits);
+                java.util.Set<Integer> dThen = new java.util.HashSet<>(droppedHandlers);
+                java.util.Set<Integer> sThen = new java.util.HashSet<>(switchConsumed);
+                restoreCounts(normalEmits, nBefore);
+                restoreCounts(catchEmits, cBefore);
+                restoreSet(droppedHandlers, dBefore);
+                restoreSet(switchConsumed, sBefore);
                 List<Ast.Stmt> elseSt = node.elseBranch() != null ? nodeToStmts(node.elseBranch()) : new ArrayList<>();
+                java.util.Map<Integer, Integer> nElse = new java.util.HashMap<>(normalEmits);
+                java.util.Map<Integer, Integer> cElse = new java.util.HashMap<>(catchEmits);
+                java.util.Set<Integer> dElse = new java.util.HashSet<>(droppedHandlers);
+                java.util.Set<Integer> sElse = new java.util.HashSet<>(switchConsumed);
                 // Свёртка непрозрачных предикатов обфускатора (1*1+1%2 != 0 и т.п.).
                 // Если условие константно, подставляем взятую ветвь. False-ветвь
                 // (else) — это ложный путь = продолжение/эпилог, поэтому дописываем
@@ -709,8 +841,27 @@ public final class StructureToAst {
                 if (cv instanceof Boolean b) {
                     // Условие константно: живая ровно одна ветвь; мёртвую не эмитим
                     // (иначе исполнятся её сайд-эффекты). Join — после if.
+                    CONST_FOLDED.incrementAndGet();
+                    // record→commit: считаем только живую ветвь, мёртвую не эмитим.
+                    restoreCounts(normalEmits, b ? nThen : nElse);
+                    restoreCounts(catchEmits, b ? cThen : cElse);
+                    restoreSet(droppedHandlers, b ? dThen : dElse);
+                    restoreSet(switchConsumed, b ? sThen : sElse);
                     out.addAll(b ? thenSt : elseSt);
                 } else {
+                    // Обе ветви реально эмитятся — union дельт от базовой точки.
+                    restoreCounts(normalEmits, nBefore);
+                    addDelta(normalEmits, nThen, nBefore);
+                    addDelta(normalEmits, nElse, nBefore);
+                    restoreCounts(catchEmits, cBefore);
+                    addDelta(catchEmits, cThen, cBefore);
+                    addDelta(catchEmits, cElse, cBefore);
+                    restoreSet(droppedHandlers, dBefore);
+                    addSetDelta(droppedHandlers, dThen, dBefore);
+                    addSetDelta(droppedHandlers, dElse, dBefore);
+                    restoreSet(switchConsumed, sBefore);
+                    addSetDelta(switchConsumed, sThen, sBefore);
+                    addSetDelta(switchConsumed, sElse, sBefore);
                     out.add(new Ast.If(cond, thenSt, elseSt.isEmpty() ? null : elseSt));
                 }
             }
@@ -757,6 +908,9 @@ public final class StructureToAst {
         // честный отказ, пока нет регионов.
         if (!rangeIsSingleBlock(blockIndex, match)) {
             int rethrowSlot = rethrowSlot(handlerBlock);
+            if (rethrowSlot == -2) RETHROW_SLOT_MINUS2.incrementAndGet();
+            else if (rethrowSlot >= 0) RETHROW_SLOT_GTE0.incrementAndGet();
+            else RETHROW_SLOT_MINUS1.incrementAndGet();
             // Снимаем обёртку только если ASTORE-слот после rethrow'а больше не
             // читается (иначе внешний handler может зависеть от записи).
             if (rethrowSlot == -2 || (rethrowSlot >= 0 && !slotReadAnywhere(rethrowSlot))) {
@@ -950,6 +1104,7 @@ public final class StructureToAst {
                 .booleanReturning(isBooleanReturn(method.desc))
                 .currentOwner(classOwner)
                 .withLiteralSink(sourcedLiterals)
+                .withSlotReads(this::slotReadAnywhere)
                 .staticMethod(isStatic);
     }
 
@@ -958,6 +1113,7 @@ public final class StructureToAst {
     private List<Ast.Stmt> lastCondStatements = List.of();
 
     private Ast.Expr condFrom(int blockIndex) {
+        lastCondStatements = java.util.List.of();
         BasicBlock bb = blocks.get(blockIndex);
         BytecodeToExpr emu = newEmu();
         List<AbstractInsnNode> prefix = new ArrayList<>();
@@ -977,6 +1133,7 @@ public final class StructureToAst {
     }
 
     private Ast.Expr loopCond(int header, java.util.Set<Integer> bodyIdx) {
+        lastCondStatements = java.util.List.of();
         BasicBlock hdr = blocks.get(header);
         AbstractInsnNode term = hdr.getTerminator();
         if (term instanceof JumpInsnNode j && j.getOpcode() != Opcodes.GOTO) {

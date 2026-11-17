@@ -148,10 +148,10 @@ public final class QualityChecker {
 
     // throw(0); throw(7);
     private static final Pattern THROW_NUM =
-            Pattern.compile("throw\\s*\\(\\s*-?\\d+\\s*\\)");
+            Pattern.compile("throw\\s+-?\\d+\\b");
     // throw(iVar12) — примитив вместо Throwable (стек испорчен); oVar — валидная ссылка, не считаем
     private static final Pattern THROW_PRIM_VAR =
-            Pattern.compile("throw\\s*\\(\\s*(iVar|lVar|fVar|dVar)\\d+\\s*\\)");
+            Pattern.compile("throw\\s+(iVar|lVar|fVar|dVar)\\d+\\b");
 
     // (Object)x-cast
     private static final Pattern CAST_OBJECT =

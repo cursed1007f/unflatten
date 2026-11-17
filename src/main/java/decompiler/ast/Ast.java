@@ -165,8 +165,8 @@ public final class Ast {
     public record Return(Expr value) implements Stmt {
     }
 
-    /** var = expr; */
-    public record Assign(Var target, Expr value) implements Stmt {
+    /** target = expr; (target can be a field/array element, not only a local). */
+    public record Assign(Expr target, Expr value) implements Stmt {
     }
 
     /** Выражение как оператор (вызов void-метода, постфикс и т.п.). */
@@ -257,18 +257,26 @@ public final class Ast {
         if (e == null) return null;
         if (e instanceof Literal l) {
             Object v = l.value();
-            return (v instanceof Number || v instanceof Boolean || v instanceof String) ? v : null;
+            // Fold only exact int/long/boolean/string; float/double are not folded.
+            if (v instanceof Integer || v instanceof Long || v instanceof Boolean || v instanceof String) {
+                return v;
+            }
+            return null;
         }
         if (e instanceof Unary u) {
             Object v = constValue(u.operand());
             if (v == null) return null;
-            if (u.op().equals("!") && v instanceof Boolean b) return !b;
-            if (u.op().equals("-") && v instanceof Number n) {
-                if (n instanceof Double || n instanceof Float) return -n.doubleValue();
-                if (n instanceof Long) return -n.longValue();
-                return -n.intValue();
+            if ("!".equals(u.op()) && v instanceof Boolean b) return !b;
+            if (v instanceof Integer i) {
+                if ("-".equals(u.op())) return -i;
+                if ("~".equals(u.op())) return ~i;
+                return null;
             }
-            if (u.op().equals("~") && v instanceof Number n) return ~n.intValue();
+            if (v instanceof Long l) {
+                if ("-".equals(u.op())) return -l;
+                if ("~".equals(u.op())) return ~l;
+                return null;
+            }
             return null;
         }
         if (e instanceof Binary b) {
@@ -282,18 +290,24 @@ public final class Ast {
 
     private static Object applyConst(String op, Object l, Object r) {
         if (l instanceof Boolean lb && r instanceof Boolean rb) {
-            if (op.equals("&&")) return lb && rb;
-            if (op.equals("||")) return lb || rb;
-            if (op.equals("==")) return lb.equals(rb);
-            if (op.equals("!=")) return !lb.equals(rb);
+            return switch (op) {
+                case "&&" -> lb && rb;
+                case "||" -> lb || rb;
+                case "==" -> lb.equals(rb);
+                case "!=" -> !lb.equals(rb);
+                default -> null;
+            };
+        }
+        // No float/double folding: Java semantics and stack category would be wrong.
+        if (!(l instanceof Integer || l instanceof Long)
+                || !(r instanceof Integer || r instanceof Long)) {
             return null;
         }
-        if (!(l instanceof Number) || !(r instanceof Number)) return null;
-        // сравнения
-        if (op.equals("==") || op.equals("!=") || op.equals("<") || op.equals("<=")
-                || op.equals(">") || op.equals(">=")) {
-            double a = ((Number) l).doubleValue();
-            double b = ((Number) r).doubleValue();
+        boolean useLong = l instanceof Long || r instanceof Long;
+        long a = ((Number) l).longValue();
+        long b = ((Number) r).longValue();
+        if ("==".equals(op) || "!=".equals(op) || "<".equals(op) || "<=".equals(op)
+                || ">".equals(op) || ">=".equals(op)) {
             return switch (op) {
                 case "==" -> a == b;
                 case "!=" -> a != b;
@@ -303,23 +317,28 @@ public final class Ast {
                 default -> a >= b;
             };
         }
-        // арифметика с плавающей точкой
-        if (l instanceof Double || r instanceof Double || l instanceof Float || r instanceof Float) {
-            double a = ((Number) l).doubleValue();
-            double b = ((Number) r).doubleValue();
-            return switch (op) {
-                case "+" -> a + b;
-                case "-" -> a - b;
-                case "*" -> a * b;
-                case "/" -> b == 0 ? null : a / b;
-                case "%" -> b == 0 ? null : a % b;
-                default -> null;
-            };
+        if (!useLong) {
+            int ia = (int) a;
+            int ib = (int) b;
+            int sh = ib & 0x1F;
+            int res;
+            switch (op) {
+                case "+" -> res = ia + ib;
+                case "-" -> res = ia - ib;
+                case "*" -> res = ia * ib;
+                case "/" -> { if (ib == 0) return null; res = ia / ib; }
+                case "%" -> { if (ib == 0) return null; res = ia % ib; }
+                case "&" -> res = ia & ib;
+                case "|" -> res = ia | ib;
+                case "^" -> res = ia ^ ib;
+                case "<<" -> res = ia << sh;
+                case ">>" -> res = ia >> sh;
+                case ">>>" -> res = ia >>> sh;
+                default -> { return null; }
+            }
+            return res;
         }
-        // целочисленная арифметика
-        boolean useLong = l instanceof Long || r instanceof Long;
-        long a = ((Number) l).longValue();
-        long b = ((Number) r).longValue();
+        int sh = (int) (b & 0x3F);
         long res;
         switch (op) {
             case "+" -> res = a + b;
@@ -330,11 +349,11 @@ public final class Ast {
             case "&" -> res = a & b;
             case "|" -> res = a | b;
             case "^" -> res = a ^ b;
-            case "<<" -> res = a << b;
-            case ">>" -> res = a >> b;
-            case ">>>" -> res = a >>> b;
+            case "<<" -> res = a << sh;
+            case ">>" -> res = a >> sh;
+            case ">>>" -> res = a >>> sh;
             default -> { return null; }
         }
-        return useLong ? (Object) res : (Object) (int) res;
+        return res;
     }
 }

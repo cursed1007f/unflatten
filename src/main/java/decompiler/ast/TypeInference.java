@@ -106,6 +106,7 @@ public final class TypeInference {
         // переиспользование слота 0 под int). Здесь примитивная классификация
         // преобладает, чтобы слот 0, куда писали ISTORE, не рендерился как "this"
         // (иначе выходит "new double[this]", "iVar29 >= this").
+        classifyArrayStores(mn, out);
         classifyPrimitiveStores(mn, out);
         refineBooleans(mn, out);
         applyUsageBasedObjectTypes(mn, isStatic, out, hierarchy);
@@ -219,6 +220,55 @@ public final class TypeInference {
 
     private static String friendlyOwner(String owner) {
         return owner.startsWith("[") ? Ast.friendlyType(owner) : Ast.friendlyType("L" + owner + ";");
+    }
+
+    /**
+     * Слот, в который кладут только что созданный массив, получает тип массива.
+     * BasicVerifier отдаёт для NEWARRAY/ANEWARRAY обычную ссылку на Object и
+     * теряет размерность, из-за чего объявление становится Object и обращение
+     * {@code a[i]} в восстановленном коде перестаёт компилироваться.
+     */
+    private static void classifyArrayStores(MethodNode mn, String[] out) {
+        AbstractInsnNode[] insns = mn.instructions.toArray();
+        for (int i = 0; i < insns.length; i++) {
+            if (insns[i].getOpcode() != Opcodes.ASTORE) continue;
+            int var = ((VarInsnNode) insns[i]).var;
+            String t = arrayTypeOf(previousReal(insns, i));
+            if (t != null && (!isObjectType(t) || isObjectType(out[var]))) out[var] = t;
+        }
+    }
+
+    /** Тип массива, создаваемого инструкцией, либо null. */
+    private static String arrayTypeOf(AbstractInsnNode n) {
+        if (n == null) return null;
+        return switch (n.getOpcode()) {
+            case Opcodes.NEWARRAY -> switch (((org.objectweb.asm.tree.IntInsnNode) n).operand) {
+                case Opcodes.T_BOOLEAN -> "boolean[]";
+                case Opcodes.T_CHAR -> "char[]";
+                case Opcodes.T_FLOAT -> "float[]";
+                case Opcodes.T_DOUBLE -> "double[]";
+                case Opcodes.T_BYTE -> "byte[]";
+                case Opcodes.T_SHORT -> "short[]";
+                case Opcodes.T_INT -> "int[]";
+                case Opcodes.T_LONG -> "long[]";
+                default -> null;
+            };
+            case Opcodes.ANEWARRAY -> {
+                String d = ((org.objectweb.asm.tree.TypeInsnNode) n).desc;
+                yield Ast.friendlyType(d.startsWith("[") ? "[" + d : "[L" + d + ";");
+            }
+            case Opcodes.MULTIANEWARRAY ->
+                    Ast.friendlyType(((org.objectweb.asm.tree.MultiANewArrayInsnNode) n).desc);
+            default -> null;
+        };
+    }
+
+    /** Предыдущая настоящая инструкция (не label/line/frame). */
+    private static AbstractInsnNode previousReal(AbstractInsnNode[] insns, int index) {
+        for (int j = index - 1; j >= 0; j--) {
+            if (insns[j].getOpcode() >= 0) return insns[j];
+        }
+        return null;
     }
 
     private static boolean isObjectType(String t) {

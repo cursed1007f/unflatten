@@ -269,6 +269,8 @@ public final class Main {
         decompiler.ast.StructureToAst.PRUNED_STATEMENTS.set(0);
         decompiler.ast.StructureToAst.PRUNED_METHODS.set(0);
         decompiler.ast.StructureToAst.RETHROW_DROPPED.set(0);
+        decompiler.ast.StructureToAst.CONST_FOLDED.set(0);
+        decompiler.ast.StructureToAst.DEAD_STORES.set(0);
         // Чекер качества агрегирует маркеры по всем классам и печатает отчёт в stderr.
         final QualityChecker.Report q = new QualityChecker.Report();
         final int[] siteBudget = {8}; // печатаем места >= this только для первых N классов
@@ -301,12 +303,21 @@ public final class Main {
         System.err.println(String.format("methods: total=%d survived=%d undecompilable=%d",
                 methodsWithCode[0], methodsWithCode[0] - q.undecompilable, q.undecompilable));
         System.err.println(String.format(
-                "diag: empty-roots=%d handler-dups=%d rethrow-dropped=%d pruned-stmts=%d pruned-methods=%d",
+                "diag: empty-roots=%d handler-dups=%d rethrow-dropped=%d const-folded=%d dead-stores=%d pruned-stmts=%d pruned-methods=%d",
                 decompiler.ast.StructureToAst.EMPTY_ROOTS.get(),
                 decompiler.ast.StructureToAst.HANDLER_DUPLICATES.get(),
                 decompiler.ast.StructureToAst.RETHROW_DROPPED.get(),
+                decompiler.ast.StructureToAst.CONST_FOLDED.get(),
+                decompiler.ast.StructureToAst.DEAD_STORES.get(),
                 decompiler.ast.StructureToAst.PRUNED_STATEMENTS.get(),
                 decompiler.ast.StructureToAst.PRUNED_METHODS.get()));
+        System.err.println(String.format("rethrow-slot: -2=%d gte0=%d -1=%d",
+                decompiler.ast.StructureToAst.RETHROW_SLOT_MINUS2.get(),
+                decompiler.ast.StructureToAst.RETHROW_SLOT_GTE0.get(),
+                decompiler.ast.StructureToAst.RETHROW_SLOT_MINUS1.get()));
+        if (!decompiler.ast.StructureToAst.EMPTY_ROOT_METHODS.isEmpty()) {
+            System.err.println("empty-roots: " + decompiler.ast.StructureToAst.EMPTY_ROOT_METHODS);
+        }
         return classes[0];
     }
 

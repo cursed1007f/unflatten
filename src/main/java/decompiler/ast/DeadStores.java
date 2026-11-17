@@ -95,9 +95,11 @@ final class DeadStores {
     /** Убирает мёртвые присваивания, рекурсивно очищая вложенные блоки. */
     private static Ast.Stmt filter(Ast.Stmt s, Set<String> reads) {
         if (s instanceof Ast.Assign a) {
-            if (isPrimLocal(a.target().name())
+            if (a.target() instanceof Ast.Var tv
+                    && isPrimLocal(tv.name())
                     && a.value() instanceof Ast.Literal
-                    && !reads.contains(a.target().name())) {
+                    && !reads.contains(tv.name())) {
+                StructureToAst.DEAD_STORES.incrementAndGet();
                 return null; // write-only константа — мёртвая
             }
             return a;

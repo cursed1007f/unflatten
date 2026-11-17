@@ -31,6 +31,13 @@ import java.util.List;
 public final class BytecodeToExpr {
 
     private final Deque<Ast.Expr> stack = new ArrayDeque<>();
+    /** Категория значения (1/2), структурно при push — основа entry-stack. */
+    private final java.util.Map<Ast.Expr, Integer> categories = new java.util.IdentityHashMap<>();
+
+    private void pushCat(Ast.Expr e, int cat) {
+        stack.push(e);
+        categories.put(e, cat);
+    }
     private final List<Ast.Stmt> stmts = new ArrayList<>();
     /** Блок уже завершён return/throw — остальные инструкции недостижимы. */
     private boolean terminated;
@@ -56,6 +63,16 @@ public final class BytecodeToExpr {
      * встрече {@code <init>} собрать корректное {@code k = new X(args)}.
      */
     private final java.util.Map<String, Ast.NewObject> pendingNew = new java.util.LinkedHashMap<>();
+    /** Слоты отложенных new — чтобы отличить мёртвую запись от живой. */
+    private final java.util.Map<String, Integer> pendingSlots = new java.util.LinkedHashMap<>();
+    /** Читается ли слот где-либо в методе (для отсева мёртвых pendingNew). */
+    private java.util.function.IntPredicate slotReads = s -> true;
+
+    /** Привязывает карту чтений слотов (slotReadAnywhere из StructureToAst). */
+    public BytecodeToExpr withSlotReads(java.util.function.IntPredicate p) {
+        if (p != null) this.slotReads = p;
+        return this;
+    }
     /** Общий на метод приёмник литералов: инвариант provenance (см. StructureToAst). */
     private java.util.Set<Ast.Expr> literalSink;
 
@@ -142,18 +159,30 @@ public final class BytecodeToExpr {
     public List<Ast.Stmt> runBlock(List<AbstractInsnNode> insns, boolean stopBeforeReturn,
                                    List<Ast.Expr> entryStack) {
         stack.clear();
+        categories.clear();
         stmts.clear();
         pendingNew.clear();
+        pendingSlots.clear();
         terminated = false;
-        for (Ast.Expr e : entryStack) stack.push(e);
+        for (Ast.Expr e : entryStack) pushCat(e, 1);
         for (AbstractInsnNode n : insns) {
             consume(n, stopBeforeReturn);
         }
-        // Не встретился <init> для сохранённого new — не теряем присваивание.
-        for (var e : pendingNew.entrySet()) {
-            stmts.add(new Ast.Assign(new Ast.Var(e.getKey()), e.getValue()));
+        // new X без <init> в этом блоке: если локаль где-то читается, присваивание
+        // k = new X() без аргументов тихо неверно (теряются реальные args) — отказ.
+        // Если локаль не читается ни разу, это мёртвая запись: её можно не эмитить.
+        java.util.List<String> live = new ArrayList<>();
+        for (String nm : pendingNew.keySet()) {
+            Integer slot = pendingSlots.get(nm);
+            if (slot == null || slotReads.test(slot)) live.add(nm);
+        }
+        if (!live.isEmpty()) {
+            throw new UndecompilableException(
+                    UndecompilableException.Kind.OTHER,
+                    "pending new without <init>: " + live);
         }
         pendingNew.clear();
+        pendingSlots.clear();
         return stmts;
     }
 
@@ -165,6 +194,7 @@ public final class BytecodeToExpr {
      */
     public Ast.Expr runExpr(List<AbstractInsnNode> insns) {
         stack.clear();
+        categories.clear();
         stmts.clear();
         pendingNew.clear();
         terminated = false;
@@ -181,6 +211,7 @@ public final class BytecodeToExpr {
      */
     public Ast.Expr extractSwitchKey(List<AbstractInsnNode> insns) {
         stack.clear();
+        categories.clear();
         for (AbstractInsnNode n : insns) {
             if (n.getOpcode() == Opcodes.TABLESWITCH || n.getOpcode() == Opcodes.LOOKUPSWITCH) {
                 break; // ключ уже на стеке
@@ -261,30 +292,30 @@ public final class BytecodeToExpr {
             case Opcodes.NOP -> {
             }
             // --- константы ---
-            case Opcodes.ACONST_NULL -> stack.push(nullLit());
-            case Opcodes.ICONST_M1 -> stack.push(lit(-1));
-            case Opcodes.ICONST_0 -> stack.push(lit(0));
-            case Opcodes.ICONST_1 -> stack.push(lit(1));
-            case Opcodes.ICONST_2 -> stack.push(lit(2));
-            case Opcodes.ICONST_3 -> stack.push(lit(3));
-            case Opcodes.ICONST_4 -> stack.push(lit(4));
-            case Opcodes.ICONST_5 -> stack.push(lit(5));
-            case Opcodes.LCONST_0 -> stack.push(lit(0L));
-            case Opcodes.LCONST_1 -> stack.push(lit(1L));
-            case Opcodes.FCONST_0 -> stack.push(lit(0.0f));
-            case Opcodes.FCONST_1 -> stack.push(lit(1.0f));
-            case Opcodes.FCONST_2 -> stack.push(lit(2.0f));
-            case Opcodes.DCONST_0 -> stack.push(lit(0.0d));
-            case Opcodes.DCONST_1 -> stack.push(lit(1.0d));
-            case Opcodes.BIPUSH, Opcodes.SIPUSH -> stack.push(lit(((IntInsnNode) n).operand));
+            case Opcodes.ACONST_NULL -> pushCat(nullLit(), 1);
+            case Opcodes.ICONST_M1 -> pushCat(lit(-1), 1);
+            case Opcodes.ICONST_0 -> pushCat(lit(0), 1);
+            case Opcodes.ICONST_1 -> pushCat(lit(1), 1);
+            case Opcodes.ICONST_2 -> pushCat(lit(2), 1);
+            case Opcodes.ICONST_3 -> pushCat(lit(3), 1);
+            case Opcodes.ICONST_4 -> pushCat(lit(4), 1);
+            case Opcodes.ICONST_5 -> pushCat(lit(5), 1);
+            case Opcodes.LCONST_0 -> pushCat(lit(0L), 2);
+            case Opcodes.LCONST_1 -> pushCat(lit(1L), 2);
+            case Opcodes.FCONST_0 -> pushCat(lit(0.0f), 1);
+            case Opcodes.FCONST_1 -> pushCat(lit(1.0f), 1);
+            case Opcodes.FCONST_2 -> pushCat(lit(2.0f), 1);
+            case Opcodes.DCONST_0 -> pushCat(lit(0.0d), 2);
+            case Opcodes.DCONST_1 -> pushCat(lit(1.0d), 2);
+            case Opcodes.BIPUSH, Opcodes.SIPUSH -> pushCat(lit(((IntInsnNode) n).operand), 1);
             case Opcodes.LDC -> {
                 Object cst = ((LdcInsnNode) n).cst;
                 if (cst instanceof org.objectweb.asm.Type t) {
                     // класс-литерал: Foo.class (через карту переименований)
                     String typeName = Ast.friendlyType(t.getDescriptor());
-                    stack.push(new Ast.Field(null, typeName + ".class", true));
+                    pushCat(new Ast.Field(null, typeName + ".class", true), 1);
                 } else {
-                    stack.push(lit(cst));
+                    pushCat(lit(cst), (cst instanceof Long || cst instanceof Double) ? 2 : 1);
                 }
             }
             // --- локальные ---
@@ -305,7 +336,7 @@ public final class BytecodeToExpr {
                 }
                 Ast.Var lv = new Ast.Var(nm);
                 if (n.getOpcode() == Opcodes.ILOAD && isBooleanSlot(var)) booleanExprs.add(lv);
-                stack.push(lv);
+                pushCat(lv, (n.getOpcode() == Opcodes.LLOAD || n.getOpcode() == Opcodes.DLOAD) ? 2 : 1);
             }
             case Opcodes.ISTORE, Opcodes.LSTORE, Opcodes.FSTORE, Opcodes.DSTORE, Opcodes.ASTORE -> {
                 int var = ((VarInsnNode) n).var;
@@ -315,11 +346,13 @@ public final class BytecodeToExpr {
                 if (n.getOpcode() == Opcodes.ASTORE && v instanceof Ast.NewObject no && no.args().isEmpty()) {
                     String nm = name(var);
                     pendingNew.put(nm, no);
+                    pendingSlots.put(nm, var);
                     // снять оставшуюся DUP-копию того же объекта, если она на стеке
                     if (!stack.isEmpty() && stack.peek() == no) stack.pop();
                     break;
                 }
                 pendingNew.remove(name(var));
+                pendingSlots.remove(name(var));
                 Ast.Var tgt = new Ast.Var(name(var));
                 boolean isBool = n.getOpcode() == Opcodes.ISTORE && isBooleanSlot(var);
                 stmts.add(new Ast.Assign(tgt, boolLit(v, isBool)));
@@ -330,45 +363,45 @@ public final class BytecodeToExpr {
                 stmts.add(new Ast.Assign(tgt, new Ast.Binary("+", tgt, lit(i.incr))));
             }
             // --- арифметика (int) ---
-            case Opcodes.IADD -> bin("+");
-            case Opcodes.ISUB -> bin("-");
-            case Opcodes.IMUL -> bin("*");
-            case Opcodes.IDIV -> bin("/");
-            case Opcodes.IREM -> bin("%");
-            case Opcodes.INEG -> un("-");
-            case Opcodes.IAND -> bin("&");
-            case Opcodes.IOR -> bin("|");
-            case Opcodes.IXOR -> bin("^");
-            case Opcodes.ISHL -> bin("<<");
-            case Opcodes.ISHR -> bin(">>");
-            case Opcodes.IUSHR -> bin(">>>");
+            case Opcodes.IADD -> bin("+", 1);
+            case Opcodes.ISUB -> bin("-", 1);
+            case Opcodes.IMUL -> bin("*", 1);
+            case Opcodes.IDIV -> bin("/", 1);
+            case Opcodes.IREM -> bin("%", 1);
+            case Opcodes.INEG -> un("-", 1);
+            case Opcodes.IAND -> bin("&", 1);
+            case Opcodes.IOR -> bin("|", 1);
+            case Opcodes.IXOR -> bin("^", 1);
+            case Opcodes.ISHL -> bin("<<", 1);
+            case Opcodes.ISHR -> bin(">>", 1);
+            case Opcodes.IUSHR -> bin(">>>", 1);
             // --- long ---
-            case Opcodes.LADD -> bin("+");
-            case Opcodes.LSUB -> bin("-");
-            case Opcodes.LMUL -> bin("*");
-            case Opcodes.LDIV -> bin("/");
-            case Opcodes.LREM -> bin("%");
-            case Opcodes.LAND -> bin("&");
-            case Opcodes.LOR -> bin("|");
-            case Opcodes.LXOR -> bin("^");
-            case Opcodes.LSHL -> bin("<<");
-            case Opcodes.LSHR -> bin(">>");
-            case Opcodes.LUSHR -> bin(">>>");
-            case Opcodes.LNEG -> un("-");
+            case Opcodes.LADD -> bin("+", 2);
+            case Opcodes.LSUB -> bin("-", 2);
+            case Opcodes.LMUL -> bin("*", 2);
+            case Opcodes.LDIV -> bin("/", 2);
+            case Opcodes.LREM -> bin("%", 2);
+            case Opcodes.LAND -> bin("&", 2);
+            case Opcodes.LOR -> bin("|", 2);
+            case Opcodes.LXOR -> bin("^", 2);
+            case Opcodes.LSHL -> bin("<<", 2);
+            case Opcodes.LSHR -> bin(">>", 2);
+            case Opcodes.LUSHR -> bin(">>>", 2);
+            case Opcodes.LNEG -> un("-", 2);
             // --- float ---
-            case Opcodes.FADD -> bin("+");
-            case Opcodes.FSUB -> bin("-");
-            case Opcodes.FMUL -> bin("*");
-            case Opcodes.FDIV -> bin("/");
-            case Opcodes.FREM -> bin("%");
-            case Opcodes.FNEG -> un("-");
+            case Opcodes.FADD -> bin("+", 1);
+            case Opcodes.FSUB -> bin("-", 1);
+            case Opcodes.FMUL -> bin("*", 1);
+            case Opcodes.FDIV -> bin("/", 1);
+            case Opcodes.FREM -> bin("%", 1);
+            case Opcodes.FNEG -> un("-", 1);
             // --- double ---
-            case Opcodes.DADD -> bin("+");
-            case Opcodes.DSUB -> bin("-");
-            case Opcodes.DMUL -> bin("*");
-            case Opcodes.DDIV -> bin("/");
-            case Opcodes.DREM -> bin("%");
-            case Opcodes.DNEG -> un("-");
+            case Opcodes.DADD -> bin("+", 2);
+            case Opcodes.DSUB -> bin("-", 2);
+            case Opcodes.DMUL -> bin("*", 2);
+            case Opcodes.DDIV -> bin("/", 2);
+            case Opcodes.DREM -> bin("%", 2);
+            case Opcodes.DNEG -> un("-", 2);
             // --- сравнения: нужен peephole с IFxx, пока честный отказ ---
             case Opcodes.LCMP, Opcodes.FCMPL, Opcodes.FCMPG, Opcodes.DCMPL, Opcodes.DCMPG ->
                     throw new UndecompilableException(
@@ -376,16 +409,15 @@ public final class BytecodeToExpr {
             // --- поля ---
             case Opcodes.GETSTATIC -> {
                 FieldInsnNode f = (FieldInsnNode) n;
-                Ast.Field fld = new Ast.Field(null, f.name, true);
+                Ast.Field fld = new Ast.Field(null, staticFieldName(f), true);
                 if ("Z".equals(f.desc)) booleanExprs.add(fld);
-                stack.push(fld);
+                pushCat(fld, ("J".equals(f.desc) || "D".equals(f.desc)) ? 2 : 1);
             }
             case Opcodes.PUTSTATIC -> {
                 FieldInsnNode f = (FieldInsnNode) n;
                 Ast.Expr v = pop();
                 Ast.Expr val = boolLit(v, "Z".equals(f.desc));
-                String owner = Ast.friendlyType("L" + f.owner + ";");
-                stmts.add(new Ast.Assign(new Ast.Var(owner + "." + f.name), val));
+                stmts.add(new Ast.Assign(new Ast.Field(null, staticFieldName(f), true), val));
             }
             case Opcodes.PUTFIELD -> {
                 Ast.Expr v = pop();
@@ -394,7 +426,7 @@ public final class BytecodeToExpr {
                 Ast.Expr val = boolLit(v, "Z".equals(f.desc)); // boolean-поле: 0/1 -> false/true
                 // Получатель — реальный, а не всегда this (oVar3.x = 1).
                 Ast.Field target = new Ast.Field(t, f.name, false);
-                stmts.add(new Ast.Assign(new Ast.Var(target.toString()), val));
+                stmts.add(new Ast.Assign(target, val));
             }
             case Opcodes.GETFIELD -> {
                 // instance-поле: receiver.field. Ресивер берём со стека; если это
@@ -405,7 +437,7 @@ public final class BytecodeToExpr {
                 Ast.Expr target = pop();
                 Ast.Field fld = new Ast.Field(target, f.name, false);
                 if ("Z".equals(f.desc)) booleanExprs.add(fld);
-                stack.push(fld);
+                pushCat(fld, ("J".equals(f.desc) || "D".equals(f.desc)) ? 2 : 1);
             }
             // --- вызовы ---
             case Opcodes.INVOKEVIRTUAL, Opcodes.INVOKESPECIAL, Opcodes.INVOKESTATIC, Opcodes.INVOKEINTERFACE ->
@@ -417,14 +449,14 @@ public final class BytecodeToExpr {
                 TypeInsnNode t = (TypeInsnNode) n;
                 // t.desc — internal-имя (java/util/Random); friendlyType ждёт дескриптор L...;
                 String newDesc = t.desc.startsWith("[") ? t.desc : "L" + t.desc + ";";
-                stack.push(new Ast.NewObject(newDesc, new ArrayList<>()));
+                pushCat(new Ast.NewObject(newDesc, new ArrayList<>()), 1);
             }
             case Opcodes.DUP -> {
                 if (stack.isEmpty()) {
                     throw new UndecompilableException(
                             UndecompilableException.Kind.UNDERFLOW, "DUP on empty stack");
                 }
-                stack.push(stack.peek());
+                pushCat(stack.peek(), catOf(stack.peek()));
             }
             case Opcodes.DUP_X1 -> {
                 Boolean b1 = category2(stackAt(0));
@@ -435,9 +467,9 @@ public final class BytecodeToExpr {
                 }
                 Ast.Expr a = pop();
                 Ast.Expr b = pop();
-                stack.push(a);
-                stack.push(b);
-                stack.push(a);
+                pushCat(a, 1);
+                pushCat(b, 1);
+                pushCat(a, 1);
             }
             case Opcodes.DUP_X2 -> {
                 Boolean b1 = category2(stackAt(0));
@@ -445,18 +477,18 @@ public final class BytecodeToExpr {
                 if (Boolean.FALSE.equals(b1) && Boolean.TRUE.equals(b2)) {
                     Ast.Expr a = pop();
                     Ast.Expr b = pop();
-                    stack.push(a);
-                    stack.push(b);
-                    stack.push(a);
+                    pushCat(a, 1);
+                    pushCat(b, 2);
+                    pushCat(a, 1);
                 } else if (Boolean.FALSE.equals(b1) && Boolean.FALSE.equals(b2)
                         && Boolean.FALSE.equals(category2(stackAt(2)))) {
                     Ast.Expr a = pop();
                     Ast.Expr b = pop();
                     Ast.Expr c = pop();
-                    stack.push(a);
-                    stack.push(c);
-                    stack.push(b);
-                    stack.push(a);
+                    pushCat(a, 1);
+                    pushCat(c, 1);
+                    pushCat(b, 1);
+                    pushCat(a, 1);
                 } else {
                     throw new UndecompilableException(
                             UndecompilableException.Kind.UNDERFLOW, "DUP_X2 category");
@@ -466,16 +498,16 @@ public final class BytecodeToExpr {
                 Boolean b1 = category2(stackAt(0));
                 if (Boolean.TRUE.equals(b1)) {
                     Ast.Expr a = pop();
-                    stack.push(a);
-                    stack.push(a);
+                    pushCat(a, 2);
+                    pushCat(a, 2);
                 } else if (Boolean.FALSE.equals(b1)
                         && Boolean.FALSE.equals(category2(stackAt(1)))) {
                     Ast.Expr a = pop();
                     Ast.Expr b = pop();
-                    stack.push(b);
-                    stack.push(a);
-                    stack.push(b);
-                    stack.push(a);
+                    pushCat(b, 1);
+                    pushCat(a, 1);
+                    pushCat(b, 1);
+                    pushCat(a, 1);
                 } else {
                     throw new UndecompilableException(
                             UndecompilableException.Kind.UNDERFLOW, "DUP2 category");
@@ -486,36 +518,36 @@ public final class BytecodeToExpr {
                  Opcodes.IF_ICMPGT, Opcodes.IF_ICMPLE -> {
                 Ast.Expr r = pop();
                 Ast.Expr l = pop();
-                stack.push(new Ast.Binary(cmpOp(n.getOpcode(), true), l, r));
+                pushCat(new Ast.Binary(cmpOp(n.getOpcode(), true), l, r), 1);
             }
             case Opcodes.IF_ACMPEQ, Opcodes.IF_ACMPNE -> {
                 Ast.Expr r = pop();
                 Ast.Expr l = pop();
-                stack.push(new Ast.Binary(
-                        n.getOpcode() == Opcodes.IF_ACMPEQ ? "==" : "!=", l, r));
+                pushCat(new Ast.Binary(
+                        n.getOpcode() == Opcodes.IF_ACMPEQ ? "==" : "!=", l, r), 1);
             }
             case Opcodes.IFEQ, Opcodes.IFNE, Opcodes.IFLT, Opcodes.IFGE, Opcodes.IFGT, Opcodes.IFLE -> {
                 Ast.Expr v = pop();
                 // boolean-выражение не сравниваем с 0: hasNext() != 0 -> hasNext()
                 if ((isBooleanExpr(v) || booleanExprs.contains(v))
                         && (n.getOpcode() == Opcodes.IFEQ || n.getOpcode() == Opcodes.IFNE)) {
-                    stack.push(n.getOpcode() == Opcodes.IFEQ ? new Ast.Unary("!", v) : v);
+                    pushCat(n.getOpcode() == Opcodes.IFEQ ? new Ast.Unary("!", v) : v, 1);
                 } else {
-                    stack.push(new Ast.Binary(cmpOp(n.getOpcode(), false), v, lit(0)));
+                    pushCat(new Ast.Binary(cmpOp(n.getOpcode(), false), v, lit(0)), 1);
                 }
             }
             case Opcodes.IFNULL, Opcodes.IFNONNULL -> {
                 Ast.Expr v = pop();
-                stack.push(n.getOpcode() == Opcodes.IFNULL
+                pushCat(n.getOpcode() == Opcodes.IFNULL
                         ? new Ast.Binary("==", v, nullLit())
-                        : new Ast.Binary("!=", v, nullLit()));
+                        : new Ast.Binary("!=", v, nullLit()), 1);
             }
             // --- массивы ---
             case Opcodes.IALOAD, Opcodes.LALOAD, Opcodes.FALOAD, Opcodes.DALOAD, Opcodes.AALOAD,
                  Opcodes.BALOAD, Opcodes.CALOAD, Opcodes.SALOAD -> {
                 Ast.Expr idx = pop();
                 Ast.Expr arr = pop();
-                stack.push(new Ast.Binary("[]", arr, idx)); // arr[idx]
+                pushCat(new Ast.Binary("[]", arr, idx), (n.getOpcode() == Opcodes.LALOAD || n.getOpcode() == Opcodes.DALOAD) ? 2 : 1); // arr[idx]
             }
             case Opcodes.IASTORE, Opcodes.LASTORE, Opcodes.FASTORE, Opcodes.DASTORE, Opcodes.AASTORE,
                  Opcodes.BASTORE, Opcodes.CASTORE, Opcodes.SASTORE -> {
@@ -527,17 +559,17 @@ public final class BytecodeToExpr {
             case Opcodes.ARRAYLENGTH -> {
                 Ast.Expr arr = pop();
                 // длина массива — это ПОЛЕ length, а не метод: arr.length
-                stack.push(new Ast.Field(arr, "length", false));
+                pushCat(new Ast.Field(arr, "length", false), 1);
             }
             case Opcodes.NEWARRAY -> {
                 Ast.Expr size = pop();
                 int atype = ((org.objectweb.asm.tree.IntInsnNode) n).operand;
-                stack.push(new Ast.NewObject("[" + arrayTypeName(atype), List.of(size)));
+                pushCat(new Ast.NewObject("[" + arrayTypeName(atype), List.of(size)), 1);
             }
             case Opcodes.ANEWARRAY -> {
                 Ast.Expr size = pop();
                 TypeInsnNode t = (TypeInsnNode) n;
-                stack.push(new Ast.NewObject("L" + t.desc + ";[]", List.of(size)));
+                pushCat(new Ast.NewObject("L" + t.desc + ";[]", List.of(size)), 1);
             }
             case Opcodes.MULTIANEWARRAY -> {
                 // multi-мерный массив: dims размеров на стеке (по порядку)
@@ -545,19 +577,19 @@ public final class BytecodeToExpr {
                         (org.objectweb.asm.tree.MultiANewArrayInsnNode) n;
                 List<Ast.Expr> sizes = new ArrayList<>();
                 for (int d = 0; d < t.dims; d++) sizes.add(0, pop());
-                stack.push(new Ast.NewObject(t.desc, sizes));
+                pushCat(new Ast.NewObject(t.desc, sizes), 1);
             }
             // --- касты и проверки ---
             case Opcodes.CHECKCAST -> {
                 TypeInsnNode t = (TypeInsnNode) n;
                 Ast.Expr v = pop();
                 if ("java/lang/Object".equals(t.desc)) {
-                    stack.push(v); // каст в Object бессмыслен — опускаем
+                    pushCat(v, 1); // каст в Object бессмыслен — опускаем
                 } else {
                     String typeName = t.desc.startsWith("[")
                             ? Ast.friendlyType(t.desc)                 // уже дескриптор массива
                             : Ast.friendlyType("L" + t.desc + ";");    // internal-имя -> дескриптор
-                    stack.push(new Ast.Cast(typeName, v));
+                    pushCat(new Ast.Cast(typeName, v), 1);
                 }
             }
             case Opcodes.INSTANCEOF -> {
@@ -566,24 +598,24 @@ public final class BytecodeToExpr {
                 String typeName = t.desc.startsWith("[")
                         ? Ast.friendlyType(t.desc)
                         : Ast.friendlyType("L" + t.desc + ";");
-                stack.push(new Ast.Binary("instanceof", v, new Ast.Var(typeName)));
+                pushCat(new Ast.Binary("instanceof", v, new Ast.Var(typeName)), 1);
             }
             // --- конвертации int/long/float/double ---
-            case Opcodes.I2L -> conv("(long)");
-            case Opcodes.I2F -> conv("(float)");
-            case Opcodes.I2D -> conv("(double)");
-            case Opcodes.L2I -> conv("(int)");
-            case Opcodes.L2F -> conv("(float)");
-            case Opcodes.L2D -> conv("(double)");
-            case Opcodes.F2I -> conv("(int)");
-            case Opcodes.F2L -> conv("(long)");
-            case Opcodes.F2D -> conv("(double)");
-            case Opcodes.D2I -> conv("(int)");
-            case Opcodes.D2L -> conv("(long)");
-            case Opcodes.D2F -> conv("(float)");
-            case Opcodes.I2B -> conv("(byte)");
-            case Opcodes.I2C -> conv("(char)");
-            case Opcodes.I2S -> conv("(short)");
+            case Opcodes.I2L -> conv("(long)", 2);
+            case Opcodes.I2F -> conv("(float)", 1);
+            case Opcodes.I2D -> conv("(double)", 2);
+            case Opcodes.L2I -> conv("(int)", 1);
+            case Opcodes.L2F -> conv("(float)", 1);
+            case Opcodes.L2D -> conv("(double)", 2);
+            case Opcodes.F2I -> conv("(int)", 1);
+            case Opcodes.F2L -> conv("(long)", 2);
+            case Opcodes.F2D -> conv("(double)", 2);
+            case Opcodes.D2I -> conv("(int)", 1);
+            case Opcodes.D2L -> conv("(long)", 2);
+            case Opcodes.D2F -> conv("(float)", 1);
+            case Opcodes.I2B -> conv("(byte)", 1);
+            case Opcodes.I2C -> conv("(char)", 1);
+            case Opcodes.I2S -> conv("(short)", 1);
             // --- управление ---
             case Opcodes.ATHROW -> {
                 // ATHROW по JVM всегда кидает ссылку. Пустой стек здесь — потеря
@@ -629,8 +661,8 @@ public final class BytecodeToExpr {
             case Opcodes.SWAP -> {
                 Ast.Expr a = pop();
                 Ast.Expr b = pop();
-                stack.push(a);
-                stack.push(b);
+                pushCat(a, catOf(a));
+                pushCat(b, catOf(b));
             }
             // --- return: берём верх стека и эмитим return ---
             case Opcodes.IRETURN, Opcodes.LRETURN, Opcodes.FRETURN, Opcodes.DRETURN, Opcodes.ARETURN -> {
@@ -684,19 +716,24 @@ public final class BytecodeToExpr {
         // StringConcatFactory: recipe + аргументы -> "a" + x + b ...
         if ("makeConcatWithConstants".equals(bsmName) && id.bsmArgs.length >= 1
                 && id.bsmArgs[0] instanceof String recipe) {
-            stack.push(buildConcat(recipe, id.bsmArgs, args));
+            pushCat(buildConcat(recipe, id.bsmArgs, args), 1);
             return;
         }
-        // LambdaMetafactory: ссылка на метод из хендла-реализации
+        // LambdaMetafactory: ссылка на метод только без захватов. Захваченные
+        // значения (args indy) в method-ref не выражаются — иначе тихо теряются.
         if ("metafactory".equals(bsmName) && id.bsmArgs.length >= 2
                 && id.bsmArgs[1] instanceof org.objectweb.asm.Handle h) {
-            stack.push(methodRef(h));
+            if (!args.isEmpty()) {
+                throw new UndecompilableException(
+                        UndecompilableException.Kind.OTHER, "lambda captures");
+            }
+            pushCat(methodRef(h), 1);
             return;
         }
         // Прочие bootstrap (ObjectMethods::bootstrap и т.п.) — типизированная заглушка.
         String ret = id.desc.substring(id.desc.indexOf(')') + 1);
         Ast.Expr ph = placeholderFor(ret);
-        if (ph != null) stack.push(ph);
+        if (ph != null) pushCat(ph, 1);
     }
 
     /** ObjectMethods::bootstrap — корректные record equals/hashCode/toString. */
@@ -717,19 +754,19 @@ public final class BytecodeToExpr {
                 sb.append(handles.get(i).getName()).append('=');
                 parts.add(lit(sb.toString()));
                 sb.setLength(0);
-                parts.add(new Ast.Field(recv, handles.get(i).getName(), false));
+                parts.add(component(handles.get(i), recv));
             }
             sb.append(']');
             parts.add(lit(sb.toString()));
             Ast.Expr e = parts.get(0);
             for (int i = 1; i < parts.size(); i++) e = new Ast.Binary("+", e, parts.get(i));
-            stack.push(e);
+            pushCat(e, 1);
             return;
         }
         if ("hashCode".equals(id.name)) {
             List<Ast.Expr> fs = new ArrayList<>();
-            for (var h : handles) fs.add(new Ast.Field(recv, h.getName(), false));
-            stack.push(new Ast.Call(new Ast.Var("java.util.Objects"), "hash", fs, false, "I"));
+            for (var h : handles) fs.add(component(h, recv));
+            pushCat(new Ast.Call(new Ast.Var("java.util.Objects"), "hash", fs, false, "I"), 1);
             return;
         }
         if ("equals".equals(id.name) && args.size() >= 2) {
@@ -738,18 +775,17 @@ public final class BytecodeToExpr {
             Ast.Expr acc = null;
             for (var h : handles) {
                 Ast.Expr cmp = new Ast.Call(new Ast.Var("java.util.Objects"), "equals",
-                        List.of(new Ast.Field(recv, h.getName(), false),
-                                new Ast.Field(cast, h.getName(), false)), false, "Z");
+                        List.of(component(h, recv), component(h, cast)), false, "Z");
                 acc = acc == null ? cmp : new Ast.Binary("&&", acc, cmp);
             }
             Ast.Expr inst = new Ast.Binary("instanceof", other, new Ast.Var(simple));
             Ast.Expr body = acc == null ? lit(true) : new Ast.Binary("&&", inst, acc);
-            stack.push(new Ast.Binary("||", new Ast.Binary("==", other, recv), body));
+            pushCat(new Ast.Binary("||", new Ast.Binary("==", other, recv), body), 1);
             return;
         }
         String ret = id.desc.substring(id.desc.indexOf(')') + 1);
         Ast.Expr ph = placeholderFor(ret);
-        if (ph != null) stack.push(ph);
+        if (ph != null) pushCat(ph, 1);
     }
 
     /** Собирает выражение конкатенации из StringConcat-рецепта и аргументов. */
@@ -775,6 +811,14 @@ public final class BytecodeToExpr {
         Ast.Expr e = parts.get(0);
         for (int i = 1; i < parts.size(); i++) e = new Ast.Binary("+", e, parts.get(i));
         return e;
+    }
+
+    /** Компонент record: field-handle -> поле, method-handle -> вызов аксессора. */
+    private Ast.Expr component(org.objectweb.asm.Handle h, Ast.Expr recv) {
+        if (h.getTag() == Opcodes.H_GETFIELD || h.getTag() == Opcodes.H_GETSTATIC) {
+            return new Ast.Field(recv, h.getName(), h.getTag() == Opcodes.H_GETSTATIC);
+        }
+        return new Ast.Call(recv, h.getName(), List.of(), false, h.getDesc());
     }
 
     /** Ссылка на метод (для LambdaMetafactory): Owner::m, this::m, Owner::new. */
@@ -812,12 +856,12 @@ public final class BytecodeToExpr {
                 if (decryptor != null) {
                     String s = decryptor.decrypt(className, index);
                     if (s != null) {
-                        stack.push(lit(s));
+                        pushCat(lit(s), 1);
                         return;
                     }
                 }
                 // ключа нет или класс не загружен — помечаем как зашифрованную строку
-                stack.push(lit("<!-- enc:" + className + "#" + index + " -->"));
+                pushCat(lit("<!-- enc:" + className + "#" + index + " -->"), 1);
                 return;
             }
         }
@@ -837,7 +881,7 @@ public final class BytecodeToExpr {
                     && p.desc() != null && p.desc().equals(no.desc())) {
                 stack.pop();
             }
-            stack.push(merged);
+            pushCat(merged, 1);
             return;
         }
 
@@ -855,6 +899,7 @@ public final class BytecodeToExpr {
         // new X; astore k; ...; aload k; invokespecial <init>(args) -> k = new X(args)
         if (m.name.equals("<init>") && target instanceof Ast.Var tv2 && pendingNew.containsKey(tv2.name())) {
             Ast.NewObject base = pendingNew.remove(tv2.name());
+            pendingSlots.remove(tv2.name());
             stmts.add(new Ast.Assign(new Ast.Var(tv2.name()), new Ast.NewObject(base.desc(), args)));
             return;
         }
@@ -872,7 +917,7 @@ public final class BytecodeToExpr {
         if (m.desc.endsWith(")V")) {
             stmts.add(new Ast.ExprStmt(call));
         } else {
-            stack.push(call);
+            pushCat(call, catOfDesc(retDesc));
         }
     }
 
@@ -905,17 +950,17 @@ public final class BytecodeToExpr {
         return args;
     }
 
-    private void bin(String op) {
+    private void bin(String op, int cat) {
         Ast.Expr r = pop();
         Ast.Expr l = pop();
         // свёртка константной арифметики: -191 + 193 -> 2 (и во всех выражениях)
         Object cv = Ast.constValue(new Ast.Binary(op, l, r));
-        stack.push(cv != null ? lit(cv) : new Ast.Binary(op, l, r));
+        pushCat(cv != null ? lit(cv) : new Ast.Binary(op, l, r), cat);
     }
 
     /** Конвертация типа: (targetType)operand. */
-    private void conv(String cast) {
-        stack.push(new Ast.Unary(cast, pop()));
+    private void conv(String cast, int cat) {
+        pushCat(new Ast.Unary(cast, pop()), cat);
     }
 
     /** Имя типа примитивного массива по opcode NEWARRAY (atype). */
@@ -933,65 +978,34 @@ public final class BytecodeToExpr {
         };
     }
 
-    private void un(String op) {
+    private void un(String op, int cat) {
         Ast.Expr o = pop();
         Object cv = Ast.constValue(new Ast.Unary(op, o));
-        stack.push(cv != null ? lit(cv) : new Ast.Unary(op, o));
+        pushCat(cv != null ? lit(cv) : new Ast.Unary(op, o), cat);
     }
 
-    /** true — категория 2 (long/double), false — 1, null — не доказано. */
+    /** Имя static-поля: свой класс — голое имя, чужой — Class.field. */
+    private String staticFieldName(FieldInsnNode f) {
+        if (classOwner != null && classOwner.equals(f.owner)) return f.name;
+        return Ast.friendlyType("L" + f.owner + ";") + "." + f.name;
+    }
+
+    /** Категория значения: только структурно (при push), без эвристик по имени. */
     private Boolean category2(Ast.Expr e) {
         if (e == null) return null;
-        if (e instanceof Ast.Literal l) {
-            Object v = l.value();
-            if (v instanceof Long || v instanceof Double) return true;
-            if (v instanceof Integer || v instanceof Float || v instanceof Boolean
-                    || v instanceof String || v instanceof Character) return false;
-            return null;
-        }
-        if (e instanceof Ast.NullLit) return false;
-        if (e instanceof Ast.Var v) {
-            String n = v.name();
-            if (n.startsWith("lVar") || n.startsWith("dVar")) return true;
-            if (n.startsWith("iVar") || n.startsWith("fVar") || n.startsWith("oVar")
-                    || "this".equals(n)) return false;
-            if (n.matches("p\\d+")) {
-                int slot = Integer.parseInt(n.substring(1)) + thisOffset;
-                if (slotTypes != null && slot >= 0 && slot < slotTypes.length) {
-                    String t = slotTypes[slot];
-                    if ("long".equals(t) || "double".equals(t)) return true;
-                    if (t != null && !t.isEmpty() && !"Object".equals(t)
-                            && !"java.lang.Object".equals(t)) return false;
-                }
-            }
-            return null;
-        }
-        if (e instanceof Ast.Unary u) {
-            String op = u.op();
-            if ("(long)".equals(op) || "(double)".equals(op)) return true;
-            if ("(int)".equals(op) || "(float)".equals(op) || "(byte)".equals(op)
-                    || "(char)".equals(op) || "(short)".equals(op) || "!".equals(op)) return false;
-            if ("-".equals(op) || "~".equals(op)) return category2(u.operand());
-            return null;
-        }
-        if (e instanceof Ast.Binary b) {
-            String op = b.op();
-            if ("==".equals(op) || "!=".equals(op) || "<".equals(op) || "<=".equals(op)
-                    || ">".equals(op) || ">=".equals(op) || "&&".equals(op)
-                    || "||".equals(op) || "instanceof".equals(op)) return false;
-            return null; // арифметика без типов не доказывается
-        }
-        if (e instanceof Ast.Call c) {
-            String r = c.retDesc();
-            if (r == null) return null;
-            if ("J".equals(r) || "D".equals(r)) return true;
-            if ("I".equals(r) || "F".equals(r) || "Z".equals(r) || "B".equals(r)
-                    || "C".equals(r) || "S".equals(r)
-                    || r.startsWith("L") || r.startsWith("[")) return false;
-            return null;
-        }
-        if (e instanceof Ast.NewObject) return false;
-        return null;
+        Integer c = categories.get(e);
+        return c == null ? null : (c == 2);
+    }
+
+    /** Категория уже положенного на стек значения; по умолчанию 1. */
+    private int catOf(Ast.Expr e) {
+        Integer c = categories.get(e);
+        return c == null ? 1 : c;
+    }
+
+    /** Категория по дескриптору возвращаемого типа: J/D — 2, остальное — 1. */
+    private static int catOfDesc(String desc) {
+        return desc != null && (desc.startsWith("J") || desc.startsWith("D")) ? 2 : 1;
     }
 
     /** Значение на позиции index от вершины (0 = top). */

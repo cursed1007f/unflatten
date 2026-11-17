@@ -1,73 +1,102 @@
-# Следующая сессия: record→commit для fold, javac-гейт + фикстуры, затем entry-stack
+# Следующая сессия: S2/S4, доказательство return 0, затем javac-гейт и entry-stack
 
-Статус: F1–F5 закрыты. Condition-prelude over-bail снят; PUTFIELD/PUTSTATIC больше
-не теряют получателя; категории стека учитываются; const-fold не исполняет мёртвую
-ветвь; rethrow-liveness консервативен по всему методу.
+Статус: M1–M8, P4, S1, S3 закрыты. B1–B3 выполнены: инварианты на
+exception-замыкании, матрица s11→s15 с clinit сошлась до единицы, все три jar
+пересн­яты на текущей сборке. Гейт можно начинать после S2 (вложенные if).
 
-## F1–F5: что сделано
+## Сделано (M-раунд)
 
-- F1. Убран false bail `condition prelude` в IF_ELSE: prelude уже эмитится
-  BLOCK-узлом до IF_ELSE. Loop-header prelude и switch-key prelude оставлены —
-  там BLOCK-узла нет и prelude реально теряется.
-- F2. PUTFIELD: получатель — реальный (`oVar3.x = 1`), а не всегда `this.x`.
-  В выводе 10 таких присваиваний. PUTSTATIC тоже добавлен (class.field = v).
-- F3. DUP2/POP2/DUP_X2/DUP_X1 категорийные: cat-2 (long/double) — один слот,
-  cat-1 — два; не доказали категорию — bail (`DUP2 category` и т.п.).
-- F4. Const-fold эмитит только живую ветвь; мёртвый else с сайд-эффектами больше
-  не исполняется.
-- F5. `slotReadAnywhere`: слот rethrow'а проверяется по всему методу, а не линейно
-  после ATHROW (block-shuffle safe).
+- **M1.** `Ast.constValue` больше не врёт: сворачиваются только int/long
+  (точные маски сдвигов 0x1F/0x3F, `>>>` от отрицательных корректно, сравнения без
+  double), float/double/строки не сворачиваются. `const-folded=4`.
+- **M3.** `Ast.Assign(Expr target, Expr value)`: PUTFIELD пишет в реальный ресивер
+  (`arr[i].x = v`, `oVar3.x = v`), PUTSTATIC — `Class.field = v`. DeadStores/
+  collectLocals/provenance обновлены под Expr-таргет.
+- **M4.** `dead-stores` в diag (счётчик удалённых write-only констант) — сейчас 1.
+- **M5.** LambdaMetafactory с захваченными аргументами — bail `lambda captures`
+  (22 на slash-obf-legit); без захватов — method-ref.
+- **M6.** ObjectMethods: handle'ы — аксессоры; компоненты record печатаются
+  вызовом (`this.time()`), field-handle — полем. Больше нет `this.time` при поле
+  `Ag_$a`.
+- **M2.** Категория значения (1/2) хранится структурно при push
+  (`IdentityHashMap<Expr,Integer>`), все `stack.push` переведены на `pushCat`;
+  `category2` больше не угадывает по имени. DUP2/DUP_X1/POP2/SWAP работают по факту.
+- **M7.** `TypeInference.classifyArrayStores`: слот, куда кладут `new T[]`,
+  получает тип массива (`RT.dStr` → `byte[]` вместо `Object`): BasicVerifier
+  отдаёт для NEWARRAY/ANEWARRAY ссылку на Object и теряет размерность.
+- **M8.** `verifyAllPathsTerminate` ищет последнюю настоящую инструкцию блока
+  (хвостовой label после ARETURN больше не «теряет» возврат); `cannotCompleteNormally`
+  рекурсивно принимает try/catch и if, где все ветви завершаются throw.
+  `missing return` 4 → 0 (Krndc, qr, phwoCn, HYFuq восстановлены).
+- **P4 (F7/F8).** `verifyEmittedBlocks` и `verifyAllPathsTerminate` переведены на
+  `reachableWithHandlers()`; handler закрывается только `catchEmits`/drop,
+  normal-only в `verifyHandlerCoverage` больше не принимается. Поймано 2 метода
+  (`dMUWHE`, `skrdLr`, lost block +1).
+- **S1.** const-fold снапшотит и откатывает `droppedHandlers`/`switchConsumed`
+  вместе со счётчиками (мёртвая ветвь больше не съедает handler живого try).
+- **S3.** `pendingNew` без `<init>` на выходе блока — bail, если слот где-либо
+  читается (`withSlotReads(slotReadAnywhere)`); мёртвые записи отбрасываются.
+  19 отказов на legit, 11 из них раньше «выживали» с arg-less `new`.
 
-## Baseline `slash-obf-legit.jar` (F1–F5)
+## Baseline `slash-obf-legit.jar` (P4 + S1 + S3)
 
-`undecompilable = 455` из 1942 методов (23.4%), survived = 1487.
+`undecompilable = 475` из 1942 (24.5%), survived = 1467, class-level errors = 0.
+Балл качества: **108**.
 
 | Причина | Кол-во |
 |---|---|
-| underflow | 210 (206 generic + 2 DUP_X1 + 1 DUP2 + 1 DUP_X2) |
-| lost block | 25 |
+| underflow | 205 |
+| lost block | 22 |
 | double emit | 2 |
-| dead code | 5 |
-| missing return | 4 |
-| other | 209 |
-| — cmp opcode | 162 |
-| — multi-block try range | 27 |
-| — switch key prelude | 11 |
-| — multiple handlers | 9 |
-| join depth / irreducible | 0 |
+| dead code | 0 |
+| missing return | 0 |
+| other | 246 |
 
-`class-level errors: 0`, `return 0: 8`, `rethrow-dropped=745`, `empty-roots=0`,
-`handler-dups=0`. На `bytecode`/`-renamed` — те же 455 и 0.
+`other` включает 19 `pending new without <init>` (S3; 11 методов раньше выживали
+с arg-less `new`). diag: `rethrow-dropped=744`, `rethrow-slot: -2=744 gte0=0 -1=26`,
+`const-folded=4`, `dead-stores=1`, `empty-roots=0`.
+Все три jar (legit, bytecode, renamed) на текущей сборке дают одинаковые
+475/1467, балл 108.
 
-**Арифметика F1.** Сняли 271 ложный bail → 581 − 271 = 310. Из этих 271 метода
-126 выжили, а 145 вскрыли настоящие дыры (underflow +88, cmp +31, multi-block +9,
-multiple handlers +4, lost block +7, missing return +3, double emit +2, switch +1):
-310 + 145 = 455. То есть 271 не были «тихой потерей» — они были ложным bail'ом, а
-их реальные дефекты теперь видны.
+Double emit 2 (`_Pk`/`WWq`) — switch-case дублирование, не fold.
 
-**Double emit 2** (`_Pk(...)V`, `WWq(...)V`) — подозрение на F4: ветви
-конвертируются обе, счётчики мёртвой ветви не откатываются (record→commit для fold
-не сделан). Инвариант ловит, тихой неверности нет; следующий шаг — откат счётчиков
-мёртвой ветви с учётом join.
+## SlashW (sW22, P4+S1+S3)
+
+820 классов, 5833 метода: undecompilable 2359 (40.4%), survived 3474, балл 683.
+underflow 279, lost block 452, double emit 0, dead code 0, missing 0,
+other 1628, `clinit` 59.
+
+Диагностика:
+- `rethrow-slot: -2=0 gte0=0 -1=65` — `rethrow-dropped=0` реален: все 65
+  multi-block try имеют handler не-чистый-rethrow (-1), детектор не молчит.
+- `empty-roots=4`: `APdFNjAFvR.AAFhddEmUE(String,FI)String`,
+  `AhtXIqxNJu.AAFhddEmUE(OutputStream,I)V`, `AyQWuvVUDM.AAFhddEmUE(Throwable)String`,
+  `ItemFlowMixin.andromeda$restoreItemPose(...)`.
+- Lost block: 452 (было 467) — S3/P4 перевели часть в `pending new`; новых
+  lost-block маркеров после M7 три: `AAFHddEmUE(AhLZOoJbTX,I)V` (BB2),
+  `AAFHddEmUE(Matrix4f,FFFI)V` (BB2), `ABrWdLXFkH()V` (BB1).
+
+## Матрица s11→s15
+
+`migration-s11-s15-v2.csv` — 1942 строки, `<clinit>` включён (69 строк).
+Сходимость: bail→survived **115** (111 + 3 underflow + 1 lost block из clinit),
+survived→bail **49**, net **66** = 1487−1421 ✓.
 
 ## Очередь
 
-1. **Record→commit для const-fold**: откатывать normalEmits/catchEmits мёртвой
-   ветви и не терять join; снять 2 double emit, не превратив их в ложные LOST_BLOCK.
-2. **javac-гейт** (ин-процессный JavaCompiler; фильтр `cant.resolve`/`doesnt.exist`;
-   категории missing return / unreachable / definite assignment; идемпотентность).
-3. **ASM-фикстуры**: opaque-true ромб с сайд-эффектом в else; PUTFIELD на локале;
-   cat-2 DUP2; nested try в handler'е; loop-header entry; switch fallthrough.
-4. **Дизайн-нота entry-stack** (сигнатура, fixpoint, unify, JOIN_DEPTH, phi→temp,
-   Ternary только JLS 15.25) → ревью → код.
-5. Entry-stack + join-depth; затем регионы вместо `switchConsumed`; затем rate-гейт.
+1. **S2.** ASM-репро «assign + IF во вложенной ветви» + инвариант «prelude уже
+   эмитирован либо bail».
+2. **S4.** record equals для float/double компонентов — disclose/поправить.
+3. **return 0 (497, SlashW)**: приложить 5 методов + байткод (сейчас найден
+   только класс `BytecodeVM/GxgJ`).
+4. **Double emit в switch** — дедуп case-блоков/регионы, вернуть 0.
+5. **LinkBootstrap.connect** (SlashW) — разобрать bsmArgs/Handle, восстановить вызов.
+6. **javac-гейт + идемпотентность**, ASM-фикстуры, дизайн-нота entry-stack.
 
 ## Проверка
 
 ```
 $env:JAVA_HOME='C:\Program Files\Java\jdk-21.0.12'; .\gradlew.bat --console=plain classes
 java -cp "build\classes\java\main;<asm 9.7.1>" decompiler.cli.Main "C:\Users\User\Desktop\slash-obf-legit.jar" --ast 1>s-out.txt 2>s-err.txt
+java -cp "..." decompiler.cli.Main "C:\Users\User\Desktop\slashW.jar" --ast 1>sW-out.txt 2>sW-err.txt
 ```
-
-Тест-джарки: `slash-obf-legit.jar`, `slash-obf-bytecode.jar`,
-`slash-obf-bytecode-renamed.jar`; `slashW.jar` — отдельный baseline после гейта.

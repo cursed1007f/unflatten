@@ -32,6 +32,10 @@ public final class JavaPrinter {
             }
         } else if (s instanceof Ast.Assign a) {
             pad(); sb.append(expr(a.target())).append(" = ").append(expr(a.value())).append(";\n");
+        } else if (s instanceof Ast.ExprStmt es && es.expr() instanceof Ast.Call c
+                && "throw".equals(c.name()) && !c.args().isEmpty()) {
+            // throw(e) — невалидный Java; печатаем throw <expr>;
+            pad(); sb.append("throw ").append(expr(c.args().get(0))).append(";\n");
         } else if (s instanceof Ast.ExprStmt es) {
             pad(); sb.append(expr(es.expr())).append(";\n");
         } else if (s instanceof Ast.If i) {
@@ -95,11 +99,33 @@ public final class JavaPrinter {
         }
     }
 
+    /** Экранирование строкового литерала: кавычки, слэши, контролы (unicode-эскейп не используем). */
+    private static String escapeString(String s) {
+        StringBuilder b = new StringBuilder(s.length() + 8);
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '\\' -> b.append("\\\\");
+                case '"' -> b.append("\\\"");
+                case '\n' -> b.append("\\n");
+                case '\r' -> b.append("\\r");
+                case '\t' -> b.append("\\t");
+                case '\b' -> b.append("\\b");
+                case '\f' -> b.append("\\f");
+                default -> {
+                    if (c < 0x20) b.append(String.format("\\%03o", (int) c));
+                    else b.append(c);
+                }
+            }
+        }
+        return b.toString();
+    }
+
     private String expr(Ast.Expr e) {
         if (e == null) return "?";
         if (e instanceof Ast.Literal l) {
             Object v = l.value();
-            if (v instanceof String s) return "\"" + s + "\"";
+            if (v instanceof String s) return "\"" + escapeString(s) + "\"";
             if (v instanceof Boolean b) return b ? "true" : "false";
             return String.valueOf(v);
         }
@@ -116,13 +142,16 @@ public final class JavaPrinter {
                 }
                 return expr(b.left()) + " = " + expr(b.right());
             }
-            return expr(b.left()) + " " + b.op() + " " + expr(b.right());
+            return "(" + expr(b.left()) + " " + b.op() + " " + expr(b.right()) + ")";
         }
         if (e instanceof Ast.Unary u) {
-            // Унарные операторы Java не обрамляются скобками: !x, -x, +x, ~x.
-            // (Было "!(x)", "-(x)" — читается хуже.)
+            // Операнд-бинарник обязан быть в скобках: !(a == b), (long)(a + b),
+            // -(a + b). Иначе приоритет Java меняет смысл (тихо неверный код).
             String op = u.op();
-            return op + expr(u.operand());
+            Ast.Expr operand = u.operand();
+            boolean needParens = operand instanceof Ast.Binary
+                    || (operand instanceof Ast.Unary && !"!".equals(op));
+            return op + (needParens ? "(" + expr(operand) + ")" : expr(operand));
         }
         if (e instanceof Ast.Cast c) {
             return "((" + c.type() + ")" + expr(c.value()) + ")";
