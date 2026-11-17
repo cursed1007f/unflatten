@@ -203,6 +203,10 @@ public final class Ast {
     public record Nop() implements Stmt {
     }
 
+    /** Объявление локальной переменной: {@code Type name;}. */
+    public record VarDecl(String type, String name) implements Stmt {
+    }
+
     /** Вспомогательное: тип в дружественной форме (Lfoo/Bar; -> foo.Bar). */
     static String friendlyType(String desc) {
         if (desc == null) return "Object";

@@ -105,8 +105,80 @@ public final class StructureToAst {
         if (!"V".equals(ret) && !containsReturn(res) && !endsWithThrow(res)) {
             res.add(new Ast.Return(defaultValue(ret)));
         }
+        // Объявляем локальные переменные в начале метода (тип из slotTypes по слоту).
+        java.util.Map<Integer, String> locals = new java.util.TreeMap<>();
+        for (Ast.Stmt s : res) collectLocals(s, locals);
+        if (!locals.isEmpty()) {
+            List<Ast.Stmt> decls = new ArrayList<>();
+            for (var e : locals.entrySet()) {
+                int slot = e.getKey();
+                String type = (slot >= 0 && slot < slotTypes.length && validType(slotTypes[slot]))
+                        ? slotTypes[slot] : "Object";
+                decls.add(new Ast.VarDecl(type, e.getValue()));
+            }
+            // В конструкторе super()/this() обязан идти первым — вставляем после него.
+            int at = (!res.isEmpty() && isCtorDelegation(res.get(0))) ? 1 : 0;
+            res.addAll(at, decls);
+        }
         return res;
     }
+
+    private static boolean validType(String t) {
+        return t != null && !t.isEmpty() && !"?".equals(t);
+    }
+
+    private static boolean isCtorDelegation(Ast.Stmt s) {
+        return s instanceof Ast.ExprStmt es && es.expr() instanceof Ast.Call c
+                && ("super".equals(c.name()) || "this".equals(c.name()));
+    }
+
+    /** Собирает имена локальных переменных (iVarN/oVarN/…) по номеру слота. */
+    private static void collectLocals(Ast.Stmt s, java.util.Map<Integer, String> out) {
+        if (s == null) return;
+        if (s instanceof Ast.Assign a) { collectLocals(a.target(), out); collectLocals(a.value(), out); }
+        else if (s instanceof Ast.Return r) collectLocals(r.value(), out);
+        else if (s instanceof Ast.ExprStmt es) collectLocals(es.expr(), out);
+        else if (s instanceof Ast.VarDecl) { /* уже объявление */ }
+        else if (s instanceof Ast.If i) {
+            collectLocals(i.cond(), out);
+            for (Ast.Stmt t : i.thenBranch()) collectLocals(t, out);
+            if (i.elseBranch() != null) for (Ast.Stmt t : i.elseBranch()) collectLocals(t, out);
+        } else if (s instanceof Ast.While w) {
+            collectLocals(w.cond(), out);
+            for (Ast.Stmt t : w.body()) collectLocals(t, out);
+        } else if (s instanceof Ast.Switch sw) {
+            collectLocals(sw.key(), out);
+            for (Ast.Case c : sw.cases()) for (Ast.Stmt t : c.body()) collectLocals(t, out);
+            if (sw.defaultBranch() != null) for (Ast.Stmt t : sw.defaultBranch()) collectLocals(t, out);
+        } else if (s instanceof Ast.TryCatch tc) {
+            for (Ast.Stmt t : tc.tryBody()) collectLocals(t, out);
+            for (Ast.Stmt t : tc.catchBody()) collectLocals(t, out);
+        } else if (s instanceof Ast.Block b) {
+            for (Ast.Stmt t : b.body()) collectLocals(t, out);
+        }
+    }
+
+    private static void collectLocals(Ast.Expr e, java.util.Map<Integer, String> out) {
+        if (e == null) return;
+        if (e instanceof Ast.Var v) {
+            var m = LOCAL.matcher(v.name());
+            if (m.matches()) out.putIfAbsent(Integer.parseInt(m.group(2)), v.name());
+        } else if (e instanceof Ast.Binary b) {
+            collectLocals(b.left(), out); collectLocals(b.right(), out);
+        } else if (e instanceof Ast.Unary u) {
+            collectLocals(u.operand(), out);
+        } else if (e instanceof Ast.Call c) {
+            collectLocals(c.target(), out);
+            for (Ast.Expr a : c.args()) collectLocals(a, out);
+        } else if (e instanceof Ast.Field f) {
+            collectLocals(f.target(), out);
+        } else if (e instanceof Ast.NewObject no) {
+            for (Ast.Expr a : no.args()) collectLocals(a, out);
+        }
+    }
+
+    private static final java.util.regex.Pattern LOCAL =
+            java.util.regex.Pattern.compile("([ilfdo]Var)(\\d+)");
 
     private static boolean containsReturn(List<Ast.Stmt> stmts) {
         if (stmts == null) return false;

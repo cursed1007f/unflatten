@@ -83,6 +83,8 @@ public final class JavaPrinter {
             pad(); sb.append("}\n");
         } else if (s instanceof Ast.Block bl) {
             for (Ast.Stmt b : bl.body()) stmt(b);
+        } else if (s instanceof Ast.VarDecl vd) {
+            pad(); sb.append(vd.type()).append(' ').append(vd.name()).append(";\n");
         } else if (s instanceof Ast.Case ca) {
             // case встречается только внутри Switch — не должен печататься сам
             for (Ast.Stmt cs : ca.body()) stmt(cs);
