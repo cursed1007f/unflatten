@@ -120,7 +120,7 @@ BB2 → BB3 (ребро внутрь тела). Recoverer **обрывает т�
   region-enclosure (post-dominance), отдельная задача.
 - **LCMP+IFxx**: `LCMP` даёт маркер `lcmp`, `IFxx` сворачивает его в сравнение long
   (==, !=, <, >=, >, <=). Утечек маркера в выводе нет. s40: survived 1608 -> 1635,
-  undecompilable 334 -> 307, cmp-bail 162 -> 140 (остались float/double), underflow
+  undecompilable 334 -> 307, cmp-bail 179 -> 140 (остались float/double); матрица: 27 survived + 11 underflow + 1 multi-block = 39 переходов, 179-39=140, underflow
   48 -> 59, балл 162 -> 163; три jar одинаковы.
 - **Осталось**: FCMPL/FCMPG/DCMPL/DCMPG требуют точной семантики NaN —
   `((Float.isNaN(a)||Float.isNaN(b)) ? -1 : Float.compare(a,b)) OP 0`; пока bail.
