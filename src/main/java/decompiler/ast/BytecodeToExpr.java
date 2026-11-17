@@ -500,6 +500,11 @@ public final class BytecodeToExpr {
         List<Ast.Expr> args = new ArrayList<>();
         for (int i = 0; i < argc; i++) args.add(0, pop());
 
+        // ObjectMethods::bootstrap — record equals/hashCode/toString.
+        if (id.bsm != null && id.bsm.getOwner().contains("ObjectMethods")) {
+            objectMethods(id, args);
+            return;
+        }
         // StringConcatFactory: recipe + аргументы -> "a" + x + b ...
         if ("makeConcatWithConstants".equals(bsmName) && id.bsmArgs.length >= 1
                 && id.bsmArgs[0] instanceof String recipe) {
@@ -513,6 +518,59 @@ public final class BytecodeToExpr {
             return;
         }
         // Прочие bootstrap (ObjectMethods::bootstrap и т.п.) — типизированная заглушка.
+        String ret = id.desc.substring(id.desc.indexOf(')') + 1);
+        Ast.Expr ph = placeholderFor(ret);
+        if (ph != null) stack.push(ph);
+    }
+
+    /** ObjectMethods::bootstrap — корректные record equals/hashCode/toString. */
+    private void objectMethods(org.objectweb.asm.tree.InvokeDynamicInsnNode id, List<Ast.Expr> args) {
+        List<org.objectweb.asm.Handle> handles = new ArrayList<>();
+        for (Object a : id.bsmArgs) {
+            if (a instanceof org.objectweb.asm.Handle h) handles.add(h);
+        }
+        Ast.Expr recv = args.isEmpty() ? new Ast.Var("this") : args.get(0);
+        String simple = classOwner != null
+                ? classOwner.substring(classOwner.lastIndexOf('/') + 1) : "Record";
+
+        if ("toString".equals(id.name)) {
+            List<Ast.Expr> parts = new ArrayList<>();
+            StringBuilder sb = new StringBuilder(simple).append('[');
+            for (int i = 0; i < handles.size(); i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(handles.get(i).getName()).append('=');
+                parts.add(new Ast.Literal(sb.toString()));
+                sb.setLength(0);
+                parts.add(new Ast.Field(recv, handles.get(i).getName(), false));
+            }
+            sb.append(']');
+            parts.add(new Ast.Literal(sb.toString()));
+            Ast.Expr e = parts.get(0);
+            for (int i = 1; i < parts.size(); i++) e = new Ast.Binary("+", e, parts.get(i));
+            stack.push(e);
+            return;
+        }
+        if ("hashCode".equals(id.name)) {
+            List<Ast.Expr> fs = new ArrayList<>();
+            for (var h : handles) fs.add(new Ast.Field(recv, h.getName(), false));
+            stack.push(new Ast.Call(new Ast.Var("java.util.Objects"), "hash", fs, false, "I"));
+            return;
+        }
+        if ("equals".equals(id.name) && args.size() >= 2) {
+            Ast.Expr other = args.get(1);
+            Ast.Expr cast = new Ast.Call(other, "cast", List.of(new Ast.Var(simple)), false, "");
+            Ast.Expr acc = null;
+            for (var h : handles) {
+                Ast.Expr cmp = new Ast.Call(new Ast.Var("java.util.Objects"), "equals",
+                        List.of(new Ast.Field(recv, h.getName(), false),
+                                new Ast.Field(cast, h.getName(), false)), false, "Z");
+                acc = acc == null ? cmp : new Ast.Binary("&&", acc, cmp);
+            }
+            Ast.Expr inst = new Ast.Binary("instanceof", other, new Ast.Var(simple));
+            Ast.Expr body = acc == null ? new Ast.Literal(true) : new Ast.Binary("&&", inst, acc);
+            stack.push(new Ast.Binary("||", new Ast.Binary("==", other, recv), body));
+            return;
+        }
         String ret = id.desc.substring(id.desc.indexOf(')') + 1);
         Ast.Expr ph = placeholderFor(ret);
         if (ph != null) stack.push(ph);
