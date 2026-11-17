@@ -97,7 +97,8 @@ public final class StructureToAst {
     public List<Ast.Stmt> convert(StructureNode root) {
         List<Ast.Stmt> out = new ArrayList<>();
         convertNode(root, out);
-        return out;
+        // Убираем мёртвые присваивания примитив-локалям (iVarN = const, нечитаемые).
+        return DeadStores.eliminate(out);
     }
 
     private void convertNode(StructureNode node, List<Ast.Stmt> out) {
