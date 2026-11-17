@@ -772,12 +772,11 @@ public final class StructureToAst {
         }
         if (!d.endsWith("[]")) return null;
         String base = d.substring(0, d.length() - 2);
-        if (base.startsWith("L")) {
-            int sc = base.indexOf(';');
-            String cn = sc > 0 ? base.substring(1, sc) : base.substring(1);
-            return cn.replace('/', '.') + "[]";
+        if (base.startsWith("L") && base.endsWith(";")) {
+            return base.substring(1, base.length() - 1).replace('/', '.') + "[]";
         }
-        return base + "[]";
+        if (base.length() == 1) return Ast.friendlyType("[" + base);
+        return base.replace('/', '.') + "[]";
     }
     private static boolean isObjectish(String t) {
         return t == null || "Object".equals(t) || "java.lang.Object".equals(t);

@@ -300,7 +300,7 @@ public final class Main {
                     if (!gr.ok()) {
                         gateBad[0]++;
                         if (!gr.realCodes().isEmpty()) gateReal[0]++;
-                        System.err.println("gate-bad: " + display + " " + gr.samples());
+                        System.err.println("gate-bad: " + display + " " + gr.samples() + " CODES " + gr.codes());
                         for (String gc : gr.codes()) gateCodes.merge(gc, 1, Integer::sum);
                     }
                 } else {
