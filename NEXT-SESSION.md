@@ -197,3 +197,12 @@ lost block: 13 BB + 2 handler = 15 (s40) -> 16 BB + 2 handler = 18 (s41); +3 р�
 **Эффект:** `array.req.but.found` 44 -> 5; `oVar4` стал `String[]`. Остаток — phi-темпы: `java.lang.Object t10_0; oVar4 = t10_0;` (тип temps берётся из StackValue, а invoke-результат там без типа массива).
 
 **Метрики s57:** 133/1942, survived 1809, underflow 5, lost block 18, балл 381; три jar идентичны; матрица s55->s57 — 0 переходов; гейт bad 113, real 74.
+## Сессия s59 — тип массива у phi-темпов (закоммичено e74733b)
+
+**Сделано:** `normalizeArrayTemps` — локал/темп с типом `Object` получает тип массива, если ему присваивают вызов с дескриптором-массивом или другой локал-массив; `entryExprs` для переменной из стека берёт тип слота из `slotTypes`, если это массив.
+
+**Проверено:** `IZOBxACP`: `java.lang.String[] t10_0;` и `java.lang.String[] oVar4;` — ошибка на `oVar4 = t10_0` ушла.
+
+**Не достигнуто:** `array.req.but.found` остаётся 5 (было 5) — остаток в других классах (`IAzR`, `IwLWbtaV` и др.), там `[]` применяется к чему-то не-массиву по другой причине. `prob.found.req` 168 -> 167.
+
+**Метрики s59:** 133/1942, survived 1809, underflow 5, lost block 18, балл 381; три jar идентичны; матрица s57->s59 — 0 переходов; гейт bad 113, real 74, class-level errors 0.
