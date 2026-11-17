@@ -63,9 +63,15 @@ public final class BytecodeToExpr {
     }
     private int thisOffset = 1;
     private static int arrayTempSeq;
+    private static final java.util.List<Ast.VarDecl> ARRAY_DECLS = new java.util.ArrayList<>();
+
+    static java.util.List<Ast.VarDecl> arrayDecls() {
+        return ARRAY_DECLS;
+    }
 
     static void resetArraySeq() {
         arrayTempSeq = 0;
+        ARRAY_DECLS.clear();
     }
     /** Внутреннее имя текущего класса (для super()/this() в конструкторах). */
     private String classOwner;
@@ -627,7 +633,7 @@ public final class BytecodeToExpr {
                         && (anew.desc().startsWith("[") || anew.desc().endsWith("[]"))) {
                     String at = arrayTypeFromDesc(anew.desc());
                     Ast.Var tmp = new Ast.Var("arr" + (arrayTempSeq++));
-                    stmts.add(new Ast.VarDecl(at, tmp.name()));
+                    ARRAY_DECLS.add(new Ast.VarDecl(at, tmp.name()));
                     stmts.add(new Ast.Assign(tmp, anew));
                     arr = tmp;
                 }

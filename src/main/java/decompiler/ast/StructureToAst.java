@@ -643,6 +643,7 @@ public final class StructureToAst {
         if (!locals.isEmpty() || !phiDecls.isEmpty()) {
             List<Ast.Stmt> decls = new ArrayList<>();
             for (Ast.VarDecl d : phiDecls) decls.add(d);
+            decls.addAll(BytecodeToExpr.arrayDecls());
             for (var e : locals.entrySet()) {
                 int slot = e.getKey();
                 String type = (slot >= 0 && slot < slotTypes.length && validType(slotTypes[slot]))
