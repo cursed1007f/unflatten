@@ -352,10 +352,11 @@ public final class TypeInference {
         if (mn == null || mn.instructions == null || types == null) return;
         AbstractInsnNode[] insns = mn.instructions.toArray();
         int n = types.length;
-        boolean[] ok = new boolean[n];
-        boolean[] hasCond = new boolean[n];
+        boolean[] cand = new boolean[n];
+        boolean[] litStore = new boolean[n];
+        boolean[] intStore = new boolean[n];
         boolean[] bad = new boolean[n];
-        java.util.Arrays.fill(ok, true);
+        boolean[] hasCond = new boolean[n];
 
         for (int i = 0; i < insns.length; i++) {
             AbstractInsnNode insn = insns[i];
@@ -369,33 +370,68 @@ public final class TypeInference {
             int op = v.getOpcode();
             if (op == Opcodes.ISTORE) {
                 AbstractInsnNode prev = prevReal(insns, i);
-                boolean lit = prev instanceof org.objectweb.asm.tree.InsnNode pi
-                        && (pi.getOpcode() == Opcodes.ICONST_0 || pi.getOpcode() == Opcodes.ICONST_1);
-                if (!lit && prev instanceof org.objectweb.asm.tree.IntInsnNode ii
-                        && (ii.getOpcode() == Opcodes.BIPUSH || ii.getOpcode() == Opcodes.SIPUSH)
-                        && (ii.operand == 0 || ii.operand == 1)) {
-                    lit = true;
-                }
-                if (!lit) ok[s] = false;
+                if (isBoolSource(prev)) cand[s] = true;
+                else if (isBoolLiteral(prev)) litStore[s] = true;
+                else intStore[s] = true;
             } else if (op == Opcodes.ILOAD) {
                 AbstractInsnNode next = nextReal(insns, i);
                 if (next instanceof org.objectweb.asm.tree.JumpInsnNode j
                         && (j.getOpcode() == Opcodes.IFEQ || j.getOpcode() == Opcodes.IFNE)) {
                     hasCond[s] = true;
+                } else if (next instanceof VarInsnNode nv && nv.getOpcode() == Opcodes.ISTORE) {
+                    // цепочка temp -> local, решается ниже
+                } else if (next instanceof org.objectweb.asm.tree.InsnNode ri
+                        && ri.getOpcode() == Opcodes.IRETURN
+                        && Type.getReturnType(mn.desc).getSort() == Type.BOOLEAN) {
+                    hasCond[s] = true;
                 } else {
                     bad[s] = true;
                 }
             } else if (op >= Opcodes.ISTORE && op <= Opcodes.ASTORE) {
-                ok[s] = false;
+                bad[s] = true;
+            }
+        }
+        // цепочки ILOAD -> ISTORE: кандидат переносится в обе стороны
+        for (int round = 0; round < 3; round++) {
+            for (int i = 0; i < insns.length; i++) {
+                if (!(insns[i] instanceof VarInsnNode v) || v.getOpcode() != Opcodes.ILOAD) continue;
+                AbstractInsnNode next = nextReal(insns, i);
+                if (!(next instanceof VarInsnNode nv) || nv.getOpcode() != Opcodes.ISTORE) continue;
+                int from = v.var;
+                int to = nv.var;
+                if (from < 0 || to < 0 || from >= n || to >= n) continue;
+                if ((cand[from] || litStore[from]) && !bad[from]) cand[to] = true;
+                if (cand[to] && !bad[to]) cand[from] = true;
             }
         }
         for (int s = 0; s < n; s++) {
-            if (ok[s] && hasCond[s] && !bad[s] && "int".equals(types[s])) {
+            boolean src = cand[s] || (litStore[s] && !intStore[s]);
+            if (src && hasCond[s] && !intStore[s] && !bad[s] && "int".equals(types[s])) {
                 types[s] = "boolean";
             }
         }
     }
 
+    private static boolean isBoolSource(AbstractInsnNode prev) {
+        if (prev instanceof MethodInsnNode mi) {
+            return Type.getReturnType(mi.desc).getSort() == Type.BOOLEAN;
+        }
+        if (prev instanceof FieldInsnNode fi) {
+            return "Z".equals(fi.desc);
+        }
+        return false;
+    }
+
+    private static boolean isBoolLiteral(AbstractInsnNode prev) {
+        if (prev instanceof org.objectweb.asm.tree.InsnNode pi) {
+            return pi.getOpcode() == Opcodes.ICONST_0 || pi.getOpcode() == Opcodes.ICONST_1;
+        }
+        if (prev instanceof org.objectweb.asm.tree.IntInsnNode ii) {
+            return (ii.getOpcode() == Opcodes.BIPUSH || ii.getOpcode() == Opcodes.SIPUSH)
+                    && (ii.operand == 0 || ii.operand == 1);
+        }
+        return false;
+    }
     private static AbstractInsnNode prevReal(AbstractInsnNode[] insns, int i) {
         for (int k = i - 1; k >= 0; k--) if (insns[k].getOpcode() >= 0) return insns[k];
         return null;
