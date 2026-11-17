@@ -127,6 +127,7 @@ public final class JavaPrinter {
             Object v = l.value();
             if (v instanceof String s) return "\"" + escapeString(s) + "\"";
             if (v instanceof Boolean b) return b ? "true" : "false";
+            if (v instanceof Long x) return x + "L";
             return String.valueOf(v);
         }
         if (e instanceof Ast.Var v) return v.name();

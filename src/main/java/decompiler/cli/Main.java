@@ -278,6 +278,7 @@ public final class Main {
         decompiler.ast.StructureToAst.RETHROW_DROPPED.set(0);
         decompiler.ast.StructureToAst.CONST_FOLDED.set(0);
         decompiler.ast.StructureToAst.DEAD_STORES.set(0);
+        decompiler.ast.JavaClassPrinter.CLINIT_RETURN_STRIPPED.set(0);
         // Чекер качества агрегирует маркеры по всем классам и печатает отчёт в stderr.
         final QualityChecker.Report q = new QualityChecker.Report();
         final int[] siteBudget = {8}; // печатаем места >= this только для первых N классов
@@ -338,6 +339,7 @@ public final class Main {
                 decompiler.ast.StructureToAst.RETHROW_SLOT_MINUS2.get(),
                 decompiler.ast.StructureToAst.RETHROW_SLOT_GTE0.get(),
                 decompiler.ast.StructureToAst.RETHROW_SLOT_MINUS1.get()));
+        System.err.println("clinit-return-stripped: " + decompiler.ast.JavaClassPrinter.CLINIT_RETURN_STRIPPED.get());
         if (!decompiler.ast.StructureToAst.EMPTY_ROOT_METHODS.isEmpty()) {
             System.err.println("empty-roots: " + decompiler.ast.StructureToAst.EMPTY_ROOT_METHODS);
         }

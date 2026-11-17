@@ -26,6 +26,10 @@ import java.util.Set;
  */
 public final class JavaClassPrinter {
 
+    /** Снятые хвостовые return; в static-инициализаторах (omit, не bail). */
+    public static final java.util.concurrent.atomic.AtomicInteger CLINIT_RETURN_STRIPPED =
+            new java.util.concurrent.atomic.AtomicInteger();
+
     private JavaClassPrinter() {
     }
 
@@ -142,8 +146,28 @@ public final class JavaClassPrinter {
 
     private static String staticInitBlock(MethodNode mn, StringDecryptor decryptor, String classOwner,
                                           ClassHierarchy hierarchy) {
-        String body = bodyOf(mn, decryptor, classOwner, hierarchy);
+        String body = stripTrailingReturn(bodyOf(mn, decryptor, classOwner, hierarchy));
         return "    static {\n" + body + "    }\n";
+    }
+
+    /** Убирает хвостовой return; из static-блока: в Java он невалиден. */
+    private static String stripTrailingReturn(String body) {
+        String[] lines = body.split("\\n", -1);
+        for (int i = lines.length - 1; i >= 0; i--) {
+            if (lines[i].isBlank()) continue;
+            if ("        return;".equals(lines[i].replace("\r", ""))) {
+                StringBuilder sb = new StringBuilder();
+                for (int j = 0; j < lines.length; j++) {
+                    if (j == i) continue;
+                    if (sb.length() > 0 || j > 0) sb.append("\n");
+                    sb.append(lines[j]);
+                }
+                CLINIT_RETURN_STRIPPED.incrementAndGet();
+                return sb.toString();
+            }
+            break;
+        }
+        return body;
     }
 
     private static String indent(String text, int spaces) {
