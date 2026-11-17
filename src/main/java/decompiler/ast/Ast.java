@@ -152,6 +152,14 @@ public final class Ast {
         }
     }
 
+    /** Java-каст: (Type) value. */
+    public record Cast(String type, Expr value) implements Expr {
+        @Override
+        public String toString() {
+            return "((" + type + ")" + value + ")";
+        }
+    }
+
     /** Оператор (не имеет значения). */
     public interface Stmt {
     }

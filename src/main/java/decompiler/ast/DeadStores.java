@@ -78,6 +78,8 @@ final class DeadStores {
             collectReads(b.right(), reads);
         } else if (e instanceof Ast.Unary u) {
             collectReads(u.operand(), reads);
+        } else if (e instanceof Ast.Cast cast) {
+            collectReads(cast.value(), reads);
         } else if (e instanceof Ast.Call c) {
             collectReads(c.target(), reads);
             for (Ast.Expr a : c.args()) collectReads(a, reads);

@@ -409,7 +409,7 @@ public final class BytecodeToExpr {
                     String typeName = t.desc.startsWith("[")
                             ? Ast.friendlyType(t.desc)                 // уже дескриптор массива
                             : Ast.friendlyType("L" + t.desc + ";");    // internal-имя -> дескриптор
-                    stack.push(new Ast.Call(v, "cast", List.of(new Ast.Var(typeName)), false));
+                    stack.push(new Ast.Cast(typeName, v));
                 }
             }
             case Opcodes.INSTANCEOF -> {
@@ -558,7 +558,7 @@ public final class BytecodeToExpr {
         }
         if ("equals".equals(id.name) && args.size() >= 2) {
             Ast.Expr other = args.get(1);
-            Ast.Expr cast = new Ast.Call(other, "cast", List.of(new Ast.Var(simple)), false, "");
+            Ast.Expr cast = new Ast.Cast(simple, other);
             Ast.Expr acc = null;
             for (var h : handles) {
                 Ast.Expr cmp = new Ast.Call(new Ast.Var("java.util.Objects"), "equals",

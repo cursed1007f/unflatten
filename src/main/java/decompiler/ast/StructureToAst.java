@@ -167,6 +167,8 @@ public final class StructureToAst {
             collectLocals(b.left(), out); collectLocals(b.right(), out);
         } else if (e instanceof Ast.Unary u) {
             collectLocals(u.operand(), out);
+        } else if (e instanceof Ast.Cast cast) {
+            collectLocals(cast.value(), out);
         } else if (e instanceof Ast.Call c) {
             collectLocals(c.target(), out);
             for (Ast.Expr a : c.args()) collectLocals(a, out);

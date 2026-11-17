@@ -122,6 +122,9 @@ public final class JavaPrinter {
             String op = u.op();
             return op + expr(u.operand());
         }
+        if (e instanceof Ast.Cast c) {
+            return "((" + c.type() + ")" + expr(c.value()) + ")";
+        }
         if (e instanceof Ast.Call c) {
             StringBuilder sb = new StringBuilder();
             if (c.target() != null) sb.append(expr(c.target())).append(".");
