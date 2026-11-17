@@ -894,6 +894,15 @@ public final class StructureToAst {
     }
 
     /** Р•СЃР»Рё Р±Р»РѕРє вЂ” РЅР°С‡Р°Р»Рѕ try-range, СЃС‚СЂРѕРёС‚ Ast.TryCatch СЃ РїРµСЂРІС‹Рј catch'РµРј. */
+    /** Начинается ли блок с try-range (его start-метка). */
+    private boolean startsTry(int idx) {
+        for (var tcb : tryCatch) {
+            Integer s = labelToBlock.get(tcb.start);
+            if (s != null && s == idx) return true;
+        }
+        return false;
+    }
+
     private Ast.Stmt tryBuildTryCatch(int blockIndex) {
         java.util.List<org.objectweb.asm.tree.TryCatchBlockNode> matches = new ArrayList<>();
         for (var tcb : tryCatch) {
@@ -948,6 +957,15 @@ public final class StructureToAst {
         normalEmits.merge(blockIndex, 1, Integer::sum);
         List<Ast.Stmt> catchBody = handlerBlock < blocks.size()
                 ? runHandlerBlock(handlerBlock) : new ArrayList<>();
+        if (handlerBlock < blocks.size()) {
+            for (BasicBlock succ : blocks.get(handlerBlock).getSuccessors()) {
+                if (!startsTry(succ.index())) continue;
+                if (normalEmits.getOrDefault(succ.index(), 0) > 0) continue;
+                switchConsumed.add(succ.index());
+                Ast.Stmt nested = tryBuildTryCatch(succ.index());
+                if (nested != null) catchBody.add(nested);
+            }
+        }
         // РїРѕРјРµС‚РёС‚СЊ handler-Р±Р»РѕРє РїРѕС‚СЂРµР±Р»С‘РЅРЅС‹Рј, С‡С‚РѕР±С‹ РЅРµ РїРµС‡Р°С‚Р°Р»СЃСЏ РїРѕРІС‚РѕСЂРЅРѕ
         switchConsumed.add(handlerBlock);
 
