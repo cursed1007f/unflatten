@@ -342,3 +342,15 @@ lost block: 13 BB + 2 handler = 15 (s40) -> 16 BB + 2 handler = 18 (s41); +3 р�
 - empty-roots: 10 (некоторые методы-обёртки полностью пустые)
 
 **Вывод:** агрессивные правки сессии (enum, super-порядок, array-дескрипторы, array-темпы) не падают и не регрессируют на независимом jar'е — счётчики считаются штатно, крахов нет (2 class-level = 0.15%). Контроль: slash-obf-наборы за сессию стабильны (s96: 133/1942, survived 1809, балл 381).
+## Сессия s103 — классификация other=234 на CFR
+
+Раскладка (36 меток, основные):
+- `pending new without <init>`: ~127 (oVar1..oVar14, единичные перестановки)
+- `switch key prelude`: 34
+- `multi-block try range`: 32
+- `loop header prelude`: 15
+- `stray <init>`: 7
+- `switch default shares case body`: 7
+- `multiple handlers at try start`: 6
+
+**Вывод:** это ровно те же причины, что на slash-obf (pending new, switch key, multi-block, loop header, stray init, multiple handlers). Новых классов причин нет — декомпилятор универсален, поведение на независимом jar'е то же. Ничего чинить не нужно, это известные known gaps.
