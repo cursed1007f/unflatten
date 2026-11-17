@@ -380,6 +380,7 @@ public final class TypeInference {
         // входные стеки блоков
         java.util.Deque<String>[] inputs = new java.util.Deque[m];
         boolean[] done = new boolean[m];
+        boolean[] primStore = new boolean[out.length];
         inputs[0] = new java.util.ArrayDeque<>();
         java.util.ArrayDeque<Integer> work = new java.util.ArrayDeque<>();
         work.add(0);
@@ -391,7 +392,7 @@ public final class TypeInference {
             // выполнить блок
             boolean ok = true;
             for (AbstractInsnNode insn : blocks.get(b)) {
-                ok = step(st, insn, out);
+                ok = step(st, insn, out, primStore);
                 if (!ok) break;
             }
             done[b] = true;
@@ -469,8 +470,8 @@ public final class TypeInference {
     }
 
     /** Один шаг машины. Возвращает false, если инструкцию нельзя обработать. */
-    private static boolean step(java.util.Deque<String> st, AbstractInsnNode insn, String[] out) {
-        int n = out.length;
+    private static boolean step(java.util.Deque<String> st, AbstractInsnNode insn, String[] out, boolean[] primStore) {
+int n = out.length;
         int op = insn.getOpcode();
         try {
             switch (op) {
@@ -516,9 +517,13 @@ public final class TypeInference {
                 case Opcodes.ASTORE -> {
                     int var = ((VarInsnNode) insn).var;
                     String top = popStr(st);
-                    if (top != null && var >= 0 && var < n && isObjectType(out[var])) out[var] = top;
+                    if (top != null && var >= 0 && var < n && isObjectType(out[var]) && !primStore[var] && top.endsWith("[]")) out[var] = top;
                 }
-                case Opcodes.ISTORE, Opcodes.LSTORE, Opcodes.FSTORE, Opcodes.DSTORE -> popStr(st);
+                case Opcodes.ISTORE, Opcodes.LSTORE, Opcodes.FSTORE, Opcodes.DSTORE -> {
+                    int v2 = ((VarInsnNode) insn).var;
+                    if (v2 >= 0 && v2 < n) primStore[v2] = true;
+                    popStr(st);
+                }
                 case Opcodes.AALOAD -> {
                     popStr(st);
                     String arr = popStr(st);
