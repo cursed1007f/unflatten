@@ -47,9 +47,20 @@ public final class JavaClassPrinter {
         StringBuilder sb = new StringBuilder();
         // заголовок
         sb.append(classDeclaration(cn)).append(" {\n\n");
-        // enum без напечатанных констант: JLS 8.9 требует ';' перед членами тела
+        // enum: JLS 8.9 — сначала список констант, затем ';' перед членами тела
         if ((cn.access & Opcodes.ACC_ENUM) != 0) {
-            sb.append("    ;\n\n");
+            List<String> consts = new ArrayList<>();
+            String selfDesc = "L" + cn.name + ";";
+            for (FieldNode f : cn.fields) {
+                if (isEnumConstant(f) && selfDesc.equals(f.desc)) {
+                    consts.add(JavaPrinter.id(f.name));
+                }
+            }
+            if (!consts.isEmpty()) {
+                sb.append("    ").append(String.join(",\n    ", consts)).append(";\n\n");
+            } else {
+                sb.append("    ;\n\n");
+            }
         }
 
         // поля
@@ -122,7 +133,12 @@ public final class JavaClassPrinter {
             return sb.toString();
         }
         sb.append(" {\n");
-        sb.append(bodyOf(mn, decryptor, cn.name, hierarchy));
+        String body = bodyOf(mn, decryptor, cn.name, hierarchy);
+        // enum-конструктор не может вызывать super(...) явно — вызов неявный
+        if ((cn.access & Opcodes.ACC_ENUM) != 0 && mn.name.equals("<init>")) {
+            body = body.replaceFirst("(?m)^[ \\t]*super\\([^\\n]*\\);[ \\t]*\\r?\\n", "");
+        }
+        sb.append(body);
         sb.append("    }\n");
         return sb.toString();
     }
