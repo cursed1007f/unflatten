@@ -113,3 +113,14 @@ BB2 → BB3 (ребро внутрь тела). Recoverer **обрывает т�
 Решение: **disclose как known gap** — bail честный, тихой потери нет.
 Фикс относится к StructureRecoverer (enclosure тела цикла), отдельная задача,
 не entry-stack.
+## s40: cmp-peephole (LCMP) и disclose enclosure
+
+- **Enclosure раннего выхода из цикла** — disclosed как known gap (13 методов):
+  natural loop не включает блоки, уходящие из тела через return; фикс требует
+  region-enclosure (post-dominance), отдельная задача.
+- **LCMP+IFxx**: `LCMP` даёт маркер `lcmp`, `IFxx` сворачивает его в сравнение long
+  (==, !=, <, >=, >, <=). Утечек маркера в выводе нет. s40: survived 1608 -> 1635,
+  undecompilable 334 -> 307, cmp-bail 162 -> 140 (остались float/double), underflow
+  48 -> 59, балл 162 -> 163; три jar одинаковы.
+- **Осталось**: FCMPL/FCMPG/DCMPL/DCMPG требуют точной семантики NaN —
+  `((Float.isNaN(a)||Float.isNaN(b)) ? -1 : Float.compare(a,b)) OP 0`; пока bail.

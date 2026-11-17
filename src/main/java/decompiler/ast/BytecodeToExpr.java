@@ -410,7 +410,12 @@ public final class BytecodeToExpr {
             case Opcodes.DREM -> bin("%", 2);
             case Opcodes.DNEG -> un("-", 2);
             // --- сравнения: нужен peephole с IFxx, пока честный отказ ---
-            case Opcodes.LCMP, Opcodes.FCMPL, Opcodes.FCMPG, Opcodes.DCMPL, Opcodes.DCMPG ->
+            case Opcodes.LCMP -> {
+                Ast.Expr cr = pop();
+                Ast.Expr cl = pop();
+                pushCat(new Ast.Binary("lcmp", cl, cr), 1);
+            }
+            case Opcodes.FCMPL, Opcodes.FCMPG, Opcodes.DCMPL, Opcodes.DCMPG ->
                     throw new UndecompilableException(
                             UndecompilableException.Kind.OTHER, "cmp opcode");
             // --- поля ---
@@ -534,6 +539,20 @@ public final class BytecodeToExpr {
                         n.getOpcode() == Opcodes.IF_ACMPEQ ? "==" : "!=", l, r), 1);
             }
             case Opcodes.IFEQ, Opcodes.IFNE, Opcodes.IFLT, Opcodes.IFGE, Opcodes.IFGT, Opcodes.IFLE -> {
+                if (stackAt(0) instanceof Ast.Binary cb0 && "lcmp".equals(cb0.op())) {
+                    pop();
+                    String fop = switch (n.getOpcode()) {
+                        case Opcodes.IFEQ -> "==";
+                        case Opcodes.IFNE -> "!=";
+                        case Opcodes.IFLT -> "<";
+                        case Opcodes.IFGE -> ">=";
+                        case Opcodes.IFGT -> ">";
+                        case Opcodes.IFLE -> "<=";
+                        default -> "==";
+                    };
+                    pushCat(new Ast.Binary(fop, cb0.left(), cb0.right()), 1);
+                    break;
+                }
                 Ast.Expr v = pop();
                 // boolean-выражение не сравниваем с 0: hasNext() != 0 -> hasNext()
                 if ((isBooleanExpr(v) || booleanExprs.contains(v))
