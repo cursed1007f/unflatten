@@ -124,3 +124,14 @@ BB2 → BB3 (ребро внутрь тела). Recoverer **обрывает т�
   48 -> 59, балл 162 -> 163; три jar одинаковы.
 - **Осталось**: FCMPL/FCMPG/DCMPL/DCMPG требуют точной семантики NaN —
   `((Float.isNaN(a)||Float.isNaN(b)) ? -1 : Float.compare(a,b)) OP 0`; пока bail.
+## s41: FCMPL/FCMPG/DCMPL/DCMPG — точная NaN-семантика
+
+Точный предикат без Ast.Ternary: NaN = (isNaN(a)||isNaN(b));
+CMPL: NaN дает -1, CMPG: +1. Для каждой ветки IFxx строится
+`!NaN && a OP b` либо `NaN || a OP b` (IFNE всегда NaN-true; IFLT/IFLE —
+CMPL-true; IFGE/IFGT — CMPG-true; IFEQ — никогда). Печать:
+`(!((Double.isNaN(a) || Double.isNaN(b))) && (a >= 0.0))`.
+Маркеры cmp не утекают (guard в pop: «cmp not fused», 0 случаев).
+s41: survived 1635 -> 1730, undecompilable 307 -> 212, cmp-bail 140 -> 0,
+underflow 59 -> 93, lost block 15 -> 18, балл 163 -> 238
+(deadIvar 111 + return0 16 — больше кода, больше метрик).

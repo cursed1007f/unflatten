@@ -415,9 +415,18 @@ public final class BytecodeToExpr {
                 Ast.Expr cl = pop();
                 pushCat(new Ast.Binary("lcmp", cl, cr), 1);
             }
-            case Opcodes.FCMPL, Opcodes.FCMPG, Opcodes.DCMPL, Opcodes.DCMPG ->
-                    throw new UndecompilableException(
-                            UndecompilableException.Kind.OTHER, "cmp opcode");
+            case Opcodes.FCMPL -> {
+                Ast.Expr fr = pop(); Ast.Expr fl = pop(); pushCat(new Ast.Binary("fcmpl", fl, fr), 1);
+            }
+            case Opcodes.FCMPG -> {
+                Ast.Expr fr = pop(); Ast.Expr fl = pop(); pushCat(new Ast.Binary("fcmpg", fl, fr), 1);
+            }
+            case Opcodes.DCMPL -> {
+                Ast.Expr dr = pop(); Ast.Expr dl = pop(); pushCat(new Ast.Binary("dcmpl", dl, dr), 1);
+            }
+            case Opcodes.DCMPG -> {
+                Ast.Expr dr = pop(); Ast.Expr dl = pop(); pushCat(new Ast.Binary("dcmpg", dl, dr), 1);
+            }
             // --- поля ---
             case Opcodes.GETSTATIC -> {
                 FieldInsnNode f = (FieldInsnNode) n;
@@ -539,9 +548,10 @@ public final class BytecodeToExpr {
                         n.getOpcode() == Opcodes.IF_ACMPEQ ? "==" : "!=", l, r), 1);
             }
             case Opcodes.IFEQ, Opcodes.IFNE, Opcodes.IFLT, Opcodes.IFGE, Opcodes.IFGT, Opcodes.IFLE -> {
-                if (stackAt(0) instanceof Ast.Binary cb0 && "lcmp".equals(cb0.op())) {
-                    pop();
-                    String fop = switch (n.getOpcode()) {
+                if (stackAt(0) instanceof Ast.Binary cb0 && isCmpMarker(cb0.op())) {
+                    stack.pop();
+                    int oc = n.getOpcode();
+                    String fop = switch (oc) {
                         case Opcodes.IFEQ -> "==";
                         case Opcodes.IFNE -> "!=";
                         case Opcodes.IFLT -> "<";
@@ -550,7 +560,22 @@ public final class BytecodeToExpr {
                         case Opcodes.IFLE -> "<=";
                         default -> "==";
                     };
-                    pushCat(new Ast.Binary(fop, cb0.left(), cb0.right()), 1);
+                    if ("lcmp".equals(cb0.op())) {
+                        pushCat(new Ast.Binary(fop, cb0.left(), cb0.right()), 1);
+                    } else {
+                        String cls = cb0.op().startsWith("d") ? "java.lang.Double" : "java.lang.Float";
+                        Ast.Expr nan = new Ast.Binary("||",
+                                new Ast.Call(new Ast.Var(cls), "isNaN", List.of(cb0.left()), true, "Z"),
+                                new Ast.Call(new Ast.Var(cls), "isNaN", List.of(cb0.right()), true, "Z"));
+                        Ast.Expr ab = new Ast.Binary(fop, cb0.left(), cb0.right());
+                        boolean nanTrue = oc == Opcodes.IFNE
+                                || (oc == Opcodes.IFLT && cb0.op().endsWith("l"))
+                                || (oc == Opcodes.IFLE && cb0.op().endsWith("l"))
+                                || (oc == Opcodes.IFGE && cb0.op().endsWith("g"))
+                                || (oc == Opcodes.IFGT && cb0.op().endsWith("g"));
+                        pushCat(nanTrue ? new Ast.Binary("||", nan, ab)
+                                : new Ast.Binary("&&", new Ast.Unary("!", nan), ab), 1);
+                    }
                     break;
                 }
                 Ast.Expr v = pop();
@@ -1078,6 +1103,12 @@ public final class BytecodeToExpr {
         return c == null ? null : (c == 2);
     }
 
+    /** Маркер результата cmp, ещё не свёрнутого с IFxx. */
+    private static boolean isCmpMarker(String op) {
+        return "lcmp".equals(op) || "fcmpl".equals(op) || "fcmpg".equals(op)
+                || "dcmpl".equals(op) || "dcmpg".equals(op);
+    }
+
     /** Категория уже положенного на стек значения; по умолчанию 1. */
     private int catOf(Ast.Expr e) {
         Integer c = categories.get(e);
@@ -1104,6 +1135,11 @@ public final class BytecodeToExpr {
             // реализован) или стек реально испорчен. Фабриковать 0/null нельзя:
             // это тихо неверный код. Помечаем метод undecompilable.
             throw new UndecompilableException(UndecompilableException.Kind.UNDERFLOW, null);
+        }
+        Ast.Expr top = stack.peek();
+        if (top instanceof Ast.Binary b && isCmpMarker(b.op())) {
+            throw new UndecompilableException(
+                    UndecompilableException.Kind.OTHER, "cmp not fused");
         }
         return stack.pop();
     }
