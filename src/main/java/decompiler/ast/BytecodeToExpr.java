@@ -276,6 +276,13 @@ public final class BytecodeToExpr {
         return v;
     }
 
+    /** Значения, оставшиеся на стеке после прогона блока (для phi на join). */
+    public java.util.List<Ast.Expr> stackSnapshot() {
+        java.util.List<Ast.Expr> out = new java.util.ArrayList<>(stack);
+        java.util.Collections.reverse(out);
+        return out;
+    }
+
     /** Операторы, произведённые последним runExpr/extractSwitchKey (prelude). */
     public List<Ast.Stmt> lastStatements() {
         return new ArrayList<>(stmts);

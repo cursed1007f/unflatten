@@ -50,7 +50,9 @@ public final class StructureToAst {
     /** Эмиссии блоков по роли: normal-flow и catch-роль (handler). */
     private final java.util.Map<Integer, Integer> normalEmits = new java.util.HashMap<>();
     /** Списки операторов по блокам — основа двухфазной эмиссии (phi-инъекции). */
-    private final java.util.Map<Integer, List<Ast.Stmt>> blockStmts = new java.util.HashMap<>();    private final java.util.Map<Integer, Integer> catchEmits = new java.util.HashMap<>();
+    private final java.util.Map<Integer, List<Ast.Stmt>> blockStmts = new java.util.HashMap<>();
+    /** Exit-выражения блоков (вершина стека на выходе) — вход для phi. */
+    private final java.util.Map<Integer, List<Ast.Expr>> blockResults = new java.util.HashMap<>();    private final java.util.Map<Integer, Integer> catchEmits = new java.util.HashMap<>();
 
     /** Диагностика прогона (сбрасывается Main). */
     public static final java.util.concurrent.atomic.AtomicInteger HANDLER_DUPLICATES =
@@ -1112,6 +1114,7 @@ public final class StructureToAst {
         List<AbstractInsnNode> all = new ArrayList<>(bb.getInstructions());
         List<Ast.Stmt> stmts = emu.runBlock(all, false);
         blockStmts.put(blockIndex, stmts);
+        blockResults.put(blockIndex, emu.stackSnapshot());
         return stmts;
     }
 
