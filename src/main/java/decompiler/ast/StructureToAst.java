@@ -146,6 +146,7 @@ public final class StructureToAst {
         this.method = method;
         this.isStatic = (method.access & Opcodes.ACC_STATIC) != 0;
         this.slotTypes = TypeInference.infer(method, isStatic, classOwner, hierarchy);
+        BytecodeToExpr.resetArraySeq();
         int paramCount = argCount(method.desc);
         this.names = new Ast.VarNameResolver(paramCount, isStatic ? 0 : 1);
         this.cffDispatch = cffDispatch;

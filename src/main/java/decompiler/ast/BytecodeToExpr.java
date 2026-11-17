@@ -53,7 +53,20 @@ public final class BytecodeToExpr {
     /** Метод возвращает boolean (IRETURN 0/1 -> return false/true). */
     private boolean booleanReturn;
     /** 1 для instance (слот 0 = this), 0 для static — для типов pN-слотов. */
+    private static String arrayTypeFromDesc(String desc) {
+        String d = desc;
+        while (d.startsWith("L") && d.endsWith(";[]")) {
+            d = "[" + d.substring(1, d.length() - 3);
+        }
+        String t = StructureToAst.safeType(d);
+        return (t == null || t.isEmpty()) ? "Object[]" : t;
+    }
     private int thisOffset = 1;
+    private static int arrayTempSeq;
+
+    static void resetArraySeq() {
+        arrayTempSeq = 0;
+    }
     /** Внутреннее имя текущего класса (для super()/this() в конструкторах). */
     private String classOwner;
     /**
@@ -610,6 +623,14 @@ public final class BytecodeToExpr {
                 Ast.Expr val = pop();
                 Ast.Expr idx = pop();
                 Ast.Expr arr = pop();
+                if (arr instanceof Ast.NewObject anew && anew.desc() != null
+                        && (anew.desc().startsWith("[") || anew.desc().endsWith("[]"))) {
+                    String at = arrayTypeFromDesc(anew.desc());
+                    Ast.Var tmp = new Ast.Var("arr" + (arrayTempSeq++));
+                    stmts.add(new Ast.VarDecl(at, tmp.name()));
+                    stmts.add(new Ast.Assign(tmp, anew));
+                    arr = tmp;
+                }
                 stmts.add(new Ast.ExprStmt(new Ast.Binary("[]=", arr, new Ast.Binary("[]", idx, val))));
             }
             case Opcodes.ARRAYLENGTH -> {
@@ -625,7 +646,7 @@ public final class BytecodeToExpr {
             case Opcodes.ANEWARRAY -> {
                 Ast.Expr size = pop();
                 TypeInsnNode t = (TypeInsnNode) n;
-                pushCat(new Ast.NewObject("L" + t.desc + ";[]", List.of(size)), 1);
+                pushCat(new Ast.NewObject(t.desc.startsWith("[") ? "[" + t.desc : "[L" + t.desc + ";", List.of(size)), 1);
             }
             case Opcodes.MULTIANEWARRAY -> {
                 // multi-мерный массив: dims размеров на стеке (по порядку)
