@@ -13,11 +13,11 @@ repositories {
 dependencies {
     // ASM Tree API — парсинг байткода. commons/analysis/tree нужны на следующих этапах,
     // поэтому подключаем сразу весь набор, чтобы не трогать build-файл позднее.
-    implementation("org.ow2.asm:asm:9.7.1")
-    implementation("org.ow2.asm:asm-tree:9.7.1")
-    implementation("org.ow2.asm:asm-analysis:9.7.1")
-    implementation("org.ow2.asm:asm-commons:9.7.1")
-    implementation("org.ow2.asm:asm-util:9.7.1")
+    implementation("org.ow2.asm:asm:9.11")
+    implementation("org.ow2.asm:asm-tree:9.11")
+    implementation("org.ow2.asm:asm-analysis:9.11")
+    implementation("org.ow2.asm:asm-commons:9.11")
+    implementation("org.ow2.asm:asm-util:9.11")
 
     testImplementation(platform("org.junit:junit-bom:5.10.2"))
     testImplementation("org.junit.jupiter:junit-jupiter")
