@@ -720,6 +720,12 @@ public final class StructureToAst {
                         decl.put(src, cur);
                         changed.add(src);
                         any[0] = true;
+                    } else if (isObjectish(cur) && a.value() instanceof Ast.NewObject no0
+                            && arrayTypeOfNew(no0.desc()) != null) {
+                        
+                        decl.put(t.name(), arrayTypeOfNew(no0.desc()));
+                        changed.add(t.name());
+                        any[0] = true;
                     } else if (isObjectish(cur) && a.value() instanceof Ast.Call c
                             && c.retDesc() != null && c.retDesc().startsWith("[")) {
                         decl.put(t.name(), Ast.friendlyType(c.retDesc()));
