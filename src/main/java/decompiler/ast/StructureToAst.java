@@ -651,10 +651,66 @@ public final class StructureToAst {
             // В конструкторе super()/this() обязан идти первым — вставляем после него.
             int at = (!res.isEmpty() && isCtorDelegation(res.get(0))) ? 1 : 0;
             res.addAll(at, decls);
+            normalizeBooleanLiterals(res);
         }
         return res;
     }
 
+    /** boolean-локалы и phi-темпы: тип из присваиваний, литералы 0/1 -> false/true. */
+    private static void normalizeBooleanLiterals(java.util.List<Ast.Stmt> res) {
+        java.util.Map<String, String> decl = new java.util.HashMap<>();
+        walkStmts(res, l -> {
+            for (Ast.Stmt s : l) if (s instanceof Ast.VarDecl d) decl.put(d.name(), d.type());
+        });
+        java.util.Set<String> bools = new java.util.HashSet<>();
+        for (var e : decl.entrySet()) if ("boolean".equals(e.getValue())) bools.add(e.getKey());
+        for (int round = 0; round < 3; round++) {
+            java.util.List<String> promote = new java.util.ArrayList<>();
+            walkStmts(res, l -> {
+                for (Ast.Stmt s : l) {
+                    if (!(s instanceof Ast.Assign a)) continue;
+                    if (!(a.target() instanceof Ast.Var t) || !(a.value() instanceof Ast.Var v)) continue;
+                    if (bools.contains(t.name()) && "int".equals(decl.get(v.name())) && !bools.contains(v.name())) {
+                        promote.add(v.name());
+                    }
+                }
+            });
+            if (promote.isEmpty()) break;
+            bools.addAll(promote);
+        }
+        walkStmts(res, l -> {
+            for (int i = 0; i < l.size(); i++) {
+                Ast.Stmt s = l.get(i);
+                if (s instanceof Ast.VarDecl d && bools.contains(d.name()) && !"boolean".equals(d.type())) {
+                    l.set(i, new Ast.VarDecl("boolean", d.name()));
+                } else if (s instanceof Ast.Assign a && a.target() instanceof Ast.Var t
+                        && bools.contains(t.name()) && a.value() instanceof Ast.Literal lit
+                        && lit.value() instanceof Integer k && (k == 0 || k == 1)) {
+                    l.set(i, new Ast.Assign(a.target(), new Ast.Literal(Boolean.valueOf(k == 1))));
+                }
+            }
+        });
+    }
+
+    private static void walkStmts(java.util.List<Ast.Stmt> list, java.util.function.Consumer<java.util.List<Ast.Stmt>> visit) {
+        visit.accept(list);
+        for (Ast.Stmt s : list) {
+            if (s instanceof Ast.Block b) {
+                walkStmts(b.body(), visit);
+            } else if (s instanceof Ast.If f) {
+                walkStmts(f.thenBranch(), visit);
+                if (f.elseBranch() != null) walkStmts(f.elseBranch(), visit);
+            } else if (s instanceof Ast.While w) {
+                walkStmts(w.body(), visit);
+            } else if (s instanceof Ast.Switch sw) {
+                for (Ast.Case c : sw.cases()) walkStmts(c.body(), visit);
+                if (sw.defaultBranch() != null) walkStmts(sw.defaultBranch(), visit);
+            } else if (s instanceof Ast.TryCatch tc) {
+                walkStmts(tc.tryBody(), visit);
+                walkStmts(tc.catchBody(), visit);
+            }
+        }
+    }
     private static boolean validType(String t) {
         return t != null && !t.isEmpty() && !"?".equals(t);
     }
