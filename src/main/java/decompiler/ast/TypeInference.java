@@ -327,6 +327,166 @@ public final class TypeInference {
             }
         }
     }
+    /** Символический проход типов: стек строк по инструкциям, точка для AALOAD/ALOAD/массивов. */
+    private static void symbolicTypes(MethodNode mn, String[] out) {
+        if (mn == null || mn.instructions == null) return;
+        AbstractInsnNode[] insns = mn.instructions.toArray();
+        int n = out.length;
+        java.util.Deque<String> st = new java.util.ArrayDeque<>();
+        try {
+            for (AbstractInsnNode insn : insns) {
+                int op = insn.getOpcode();
+                switch (op) {
+                    case -1 -> { } // label/line/frame
+                    case Opcodes.ACONST_NULL -> st.push("Object");
+                    case Opcodes.ICONST_M1, Opcodes.ICONST_0, Opcodes.ICONST_1, Opcodes.ICONST_2,
+                         Opcodes.ICONST_3, Opcodes.ICONST_4, Opcodes.ICONST_5,
+                         Opcodes.BIPUSH, Opcodes.SIPUSH, Opcodes.ARRAYLENGTH,
+                         Opcodes.IALOAD, Opcodes.LALOAD, Opcodes.FALOAD, Opcodes.DALOAD,
+                         Opcodes.BALOAD, Opcodes.CALOAD, Opcodes.SALOAD,
+                         Opcodes.IADD, Opcodes.ISUB, Opcodes.IMUL, Opcodes.IDIV, Opcodes.IREM,
+                         Opcodes.INEG, Opcodes.I2B, Opcodes.I2C, Opcodes.I2S,
+                         Opcodes.I2L, Opcodes.I2F, Opcodes.I2D -> st.push("int");
+                    case Opcodes.LCONST_0, Opcodes.LCONST_1,
+                         Opcodes.LADD, Opcodes.LSUB, Opcodes.LMUL, Opcodes.LDIV, Opcodes.LREM,
+                         Opcodes.LNEG, Opcodes.L2I, Opcodes.L2F, Opcodes.L2D,
+                         
+                         Opcodes.LAND, Opcodes.LOR, Opcodes.LXOR, Opcodes.LSHL, Opcodes.LSHR, Opcodes.LUSHR -> st.push("long");
+                    case Opcodes.DCONST_0, Opcodes.DCONST_1, Opcodes.DADD, Opcodes.DSUB, Opcodes.DMUL,
+                         Opcodes.DDIV, Opcodes.DREM, Opcodes.DNEG, Opcodes.D2I, Opcodes.D2L,
+                         Opcodes.D2F -> st.push("double");
+                    case Opcodes.FCONST_0, Opcodes.FCONST_1, Opcodes.FCONST_2,
+                         Opcodes.FADD, Opcodes.FSUB, Opcodes.FMUL, Opcodes.FDIV, Opcodes.FREM,
+                         Opcodes.FNEG, Opcodes.F2I, Opcodes.F2L, Opcodes.F2D -> st.push("float");
+                    case Opcodes.LDC -> {
+                        Object c = ((org.objectweb.asm.tree.LdcInsnNode) insn).cst;
+                        if (c instanceof Type t) st.push(friendly(t));
+                        else if (c instanceof Integer || c instanceof Long) st.push(c instanceof Long ? "long" : "int");
+                        else if (c instanceof Float) st.push("float");
+                        else if (c instanceof Double) st.push("double");
+                        else st.push("String");
+                    }
+                    case Opcodes.ALOAD -> {
+                        int var = ((VarInsnNode) insn).var;
+                        st.push(var >= 0 && var < n && out[var] != null ? out[var] : "Object");
+                    }
+                    case Opcodes.ILOAD -> st.push("int");
+                    case Opcodes.LLOAD -> st.push("long");
+                    case Opcodes.FLOAD -> st.push("float");
+                    case Opcodes.DLOAD -> st.push("double");
+                    case Opcodes.ASTORE -> {
+                        int var = ((VarInsnNode) insn).var;
+                        String top = popStr(st);
+                        if (top != null && var >= 0 && var < n && isObjectType(out[var])) out[var] = top;
+                    }
+                    case Opcodes.ISTORE, Opcodes.LSTORE, Opcodes.FSTORE, Opcodes.DSTORE -> popStr(st);
+                    case Opcodes.AALOAD -> {
+                        popStr(st); // index
+                        String arr = popStr(st);
+                        if (arr != null && arr.endsWith("[]")) st.push(arr.substring(0, arr.length() - 2));
+                        else st.push("Object");
+                    }
+                    case Opcodes.AASTORE, Opcodes.IASTORE, Opcodes.LASTORE, Opcodes.FASTORE,
+                         Opcodes.DASTORE, Opcodes.BASTORE, Opcodes.CASTORE, Opcodes.SASTORE -> {
+                        popStr(st); popStr(st); popStr(st);
+                    }
+                    case Opcodes.DUP -> st.push(st.peek());
+                    case Opcodes.POP -> popStr(st);
+                    case Opcodes.POP2 -> { popStr(st); popStr(st); }
+                    case Opcodes.NEW -> {
+                        String d = ((org.objectweb.asm.tree.TypeInsnNode) insn).desc;
+                        st.push(Ast.friendlyType("L" + d + ";"));
+                    }
+                    case Opcodes.NEWARRAY -> {
+                        popStr(st);
+                        int at = ((org.objectweb.asm.tree.IntInsnNode) insn).operand;
+                        st.push(arrayOfType(atypeName(at)));
+                    }
+                    case Opcodes.ANEWARRAY -> {
+                        popStr(st);
+                        String d = ((org.objectweb.asm.tree.TypeInsnNode) insn).desc;
+                        st.push(arrayOfType(d.startsWith("[") ? d : "L" + d + ";"));
+                    }
+                    case Opcodes.MULTIANEWARRAY -> {
+                        int dims = ((org.objectweb.asm.tree.MultiANewArrayInsnNode) insn).dims;
+                        for (int k = 0; k < dims; k++) popStr(st);
+                        st.push(Ast.friendlyType(((org.objectweb.asm.tree.MultiANewArrayInsnNode) insn).desc));
+                    }
+                    case Opcodes.CHECKCAST -> {
+                        popStr(st);
+                        String d = ((org.objectweb.asm.tree.TypeInsnNode) insn).desc;
+                        st.push(Ast.friendlyType("L" + d + ";"));
+                    }
+                    case Opcodes.INSTANCEOF -> { popStr(st); st.push("boolean"); }
+                    case Opcodes.GETSTATIC -> {
+                        String d = ((FieldInsnNode) insn).desc;
+                        st.push(Ast.friendlyType(d));
+                    }
+                    case Opcodes.GETFIELD -> {
+                        popStr(st);
+                        String d = ((FieldInsnNode) insn).desc;
+                        st.push(Ast.friendlyType(d));
+                    }
+                    case Opcodes.PUTSTATIC -> popStr(st);
+                    case Opcodes.PUTFIELD -> { popStr(st); popStr(st); }
+                    case Opcodes.INVOKESTATIC, Opcodes.INVOKEVIRTUAL, Opcodes.INVOKESPECIAL,
+                         Opcodes.INVOKEINTERFACE -> {
+                        MethodInsnNode mi = (MethodInsnNode) insn;
+                        Type[] args = Type.getArgumentTypes(mi.desc);
+                        for (int k = 0; k < args.length; k++) popStr(st);
+                        if (mi.getOpcode() != Opcodes.INVOKESTATIC) popStr(st); // receiver
+                        Type ret = Type.getReturnType(mi.desc);
+                        if (ret.getSort() != Type.VOID) st.push(friendly(ret));
+                    }
+                    case Opcodes.INVOKEDYNAMIC -> {
+                        org.objectweb.asm.tree.InvokeDynamicInsnNode id =
+                                (org.objectweb.asm.tree.InvokeDynamicInsnNode) insn;
+                        Type[] args = Type.getArgumentTypes(id.desc);
+                        for (int k = 0; k < args.length; k++) popStr(st);
+                        Type ret = Type.getReturnType(id.desc);
+                        if (ret.getSort() != Type.VOID) st.push(friendly(ret));
+                    }
+                    case Opcodes.GOTO, Opcodes.IFEQ, Opcodes.IFNE, Opcodes.IFLT, Opcodes.IFGE,
+                         Opcodes.IFGT, Opcodes.IFLE, Opcodes.IF_ICMPEQ, Opcodes.IF_ICMPNE,
+                         Opcodes.IF_ICMPLT, Opcodes.IF_ICMPGE, Opcodes.IF_ICMPGT, Opcodes.IF_ICMPLE,
+                         Opcodes.IF_ACMPEQ, Opcodes.IF_ACMPNE, Opcodes.IFNULL, Opcodes.IFNONNULL,
+                         Opcodes.LOOKUPSWITCH, Opcodes.TABLESWITCH, Opcodes.JSR, Opcodes.RET,
+                         Opcodes.IRETURN, Opcodes.LRETURN, Opcodes.FRETURN, Opcodes.DRETURN,
+                         Opcodes.ARETURN, Opcodes.RETURN, Opcodes.ATHROW, Opcodes.MONITORENTER,
+                         Opcodes.MONITOREXIT, Opcodes.IINC -> {
+                        // управление/терминаторы: стек портится, но уже выведенные in[] оставляем
+                    }
+                    default -> { return; }
+                }
+            }
+        } catch (RuntimeException e) {
+            // стек испорчен: уже выведенные типы оставляем, дальше не ходим
+            return;
+        }
+    }
+
+    private static String popStr(java.util.Deque<String> st) {
+        if (st.isEmpty()) return null;
+        return st.pop();
+    }
+
+    private static String arrayOfType(String elem) {
+        return (elem == null || elem.isEmpty()) ? "Object[]" : elem + "[]";
+    }
+
+    private static String atypeName(int atype) {
+        return switch (atype) {
+            case Opcodes.T_BOOLEAN -> "boolean";
+            case Opcodes.T_CHAR -> "char";
+            case Opcodes.T_FLOAT -> "float";
+            case Opcodes.T_DOUBLE -> "double";
+            case Opcodes.T_BYTE -> "byte";
+            case Opcodes.T_SHORT -> "short";
+            case Opcodes.T_INT -> "int";
+            case Opcodes.T_LONG -> "long";
+            default -> "Object";
+        };
+    }
     private static boolean isObjectType(String t) {
         return "Object".equals(t) || "java.lang.Object".equals(t);
     }
