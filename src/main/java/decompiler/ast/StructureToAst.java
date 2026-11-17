@@ -52,7 +52,10 @@ public final class StructureToAst {
     /** Списки операторов по блокам — основа двухфазной эмиссии (phi-инъекции). */
     private final java.util.Map<Integer, List<Ast.Stmt>> blockStmts = new java.util.HashMap<>();
     /** Exit-выражения блоков (вершина стека на выходе) — вход для phi. */
-    private final java.util.Map<Integer, List<Ast.Expr>> blockResults = new java.util.HashMap<>();    private final java.util.Map<Integer, Integer> catchEmits = new java.util.HashMap<>();
+    private final java.util.Map<Integer, List<Ast.Expr>> blockResults = new java.util.HashMap<>();
+    private final java.util.List<PhiSite> phiSites = new java.util.ArrayList<>();
+    private final java.util.Set<Ast.VarDecl> phiDecls = new java.util.LinkedHashSet<>();
+    private int phiCounter;    private final java.util.Map<Integer, Integer> catchEmits = new java.util.HashMap<>();
 
     /** Диагностика прогона (сбрасывается Main). */
     public static final java.util.concurrent.atomic.AtomicInteger HANDLER_DUPLICATES =
@@ -615,6 +618,7 @@ public final class StructureToAst {
         // DCE: доказуемо недостижимый код после терминатора выкидываем, а не
         // роняем метод (это не потеря значения, а мусор структуры).
         pruneDeadStatements(res);
+        lowerPhi();
         verifyNoDeadStatements(res);
         verifyLiteralProvenance(res);
         // Гарантия валидного Java: non-void метод, в котором восстановитель структуры
@@ -629,8 +633,9 @@ public final class StructureToAst {
         // Объявляем локальные переменные в начале метода (тип из slotTypes по слоту).
         java.util.Map<Integer, String> locals = new java.util.TreeMap<>();
         for (Ast.Stmt s : res) collectLocals(s, locals);
-        if (!locals.isEmpty()) {
+        if (!locals.isEmpty() || !phiDecls.isEmpty()) {
             List<Ast.Stmt> decls = new ArrayList<>();
+            for (Ast.VarDecl d : phiDecls) decls.add(d);
             for (var e : locals.entrySet()) {
                 int slot = e.getKey();
                 String type = (slot >= 0 && slot < slotTypes.length && validType(slotTypes[slot]))
@@ -1107,12 +1112,73 @@ public final class StructureToAst {
      * @param count false — пробная эмиссия (try-body): её нельзя считать в
      *              emitCounts, иначе пустой try даёт ложный double emit.
      */
+    /** phi-сайт: входное значение блока, материализуемое временной. */
+    private record PhiSite(int block, int pos, String type, Ast.Var temp) {
+    }
+
+    private java.util.Map<Integer, List<StackValue>> entryStacksCache;
+
+    private java.util.Map<Integer, List<StackValue>> entryStacks() {
+        if (entryStacksCache == null) entryStacksCache = StackInference.byInstruction(method);
+        return entryStacksCache;
+    }
+
+    /** Входные значения блока, если он стартует с непустым стеком (tN). */
+    private List<Ast.Expr> entryExprs(int blockIndex) {
+        BasicBlock b = blocks.get(blockIndex);
+        AbstractInsnNode first = b.getFirstReal();
+        if (first == null) return List.of();
+        List<StackValue> want = entryStacks().get(method.instructions.indexOf(first));
+        if (want == null || want.isEmpty()) return List.of();
+        List<Ast.Expr> out = new ArrayList<>();
+        for (int i = 0; i < want.size(); i++) {
+            StackValue v = want.get(i);
+            Ast.Var t = new Ast.Var("t" + (phiCounter++));
+            phiDecls.add(new Ast.VarDecl(v.type(), t.name()));
+            phiSites.add(new PhiSite(blockIndex, i, v.type(), t));
+            out.add(t);
+        }
+        return out;
+    }
+
+    /**
+     * Post-pass phi: после финальной структуры присвоить tN в предшественниках.
+     * Спекулятивные ветви к этому моменту отброшены; нет значения — отказ.
+     */
+    private void lowerPhi() {
+        for (PhiSite s : phiSites) {
+            BasicBlock b = blocks.get(s.block);
+            List<BasicBlock> preds = b.getPredecessors();
+            if (preds.isEmpty()) {
+                throw new UndecompilableException(
+                        UndecompilableException.Kind.JOIN_DEPTH, "phi without predecessors");
+            }
+            List<Ast.Expr> vals = new ArrayList<>();
+            for (BasicBlock p : preds) {
+                List<Ast.Expr> r = blockResults.get(p.index());
+                if (r == null || r.size() <= s.pos) {
+                    throw new UndecompilableException(
+                            UndecompilableException.Kind.JOIN_DEPTH, "phi without predecessor value");
+                }
+                vals.add(r.get(s.pos));
+            }
+            for (int k = 0; k < preds.size(); k++) {
+                List<Ast.Stmt> pl = blockStmts.get(preds.get(k).index());
+                if (pl == null) {
+                    throw new UndecompilableException(
+                            UndecompilableException.Kind.JOIN_DEPTH, "phi without block stmts");
+                }
+                pl.add(new Ast.Assign(s.temp, vals.get(k)));
+            }
+        }
+    }
     private List<Ast.Stmt> blockToStmt(int blockIndex, boolean count) {
         if (count) normalEmits.merge(blockIndex, 1, Integer::sum);
         BasicBlock bb = blocks.get(blockIndex);
         BytecodeToExpr emu = newEmu();
         List<AbstractInsnNode> all = new ArrayList<>(bb.getInstructions());
-        List<Ast.Stmt> stmts = emu.runBlock(all, false);
+        List<Ast.Expr> entry = entryExprs(blockIndex);
+        List<Ast.Stmt> stmts = emu.runBlock(all, false, entry);
         blockStmts.put(blockIndex, stmts);
         blockResults.put(blockIndex, emu.stackSnapshot());
         return stmts;

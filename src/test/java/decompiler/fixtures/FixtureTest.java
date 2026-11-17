@@ -129,7 +129,7 @@ public class FixtureTest {
     }
 
     @Test
-    @org.junit.jupiter.api.Disabled("known gap: entry-stack недоступен — underflow на слиянии ветвей")
+    @org.junit.jupiter.api.Disabled("phi: predecessor value не найден (ветвь слита с cond-блоком) — underflow закрыт, join не добит")
     void ternaryBranches() {
         ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
         cw.visit(Opcodes.V11, Opcodes.ACC_PUBLIC, "T5", null, "java/lang/Object", null);
@@ -182,7 +182,7 @@ public class FixtureTest {
     }
 
     @Test
-    @org.junit.jupiter.api.Disabled("known gap: потерян handler BB2 (nested try) — emitted without catch")
+    @org.junit.jupiter.api.Disabled("known gap: handler BB2 без catch (nested try) — phi не лечит, нужен catch-путь")
     void nestedTryInHandler() {
         ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
         cw.visit(Opcodes.V11, Opcodes.ACC_PUBLIC, "T7", null, "java/lang/Object", null);
