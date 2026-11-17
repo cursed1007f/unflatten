@@ -143,6 +143,7 @@ public final class JavaPrinter {
             if (v instanceof String s) return "\"" + escapeString(s) + "\"";
             if (v instanceof Boolean b) return b ? "true" : "false";
             if (v instanceof Long x) return x + "L";
+            if (v instanceof Float f) return f + "f";
             return String.valueOf(v);
         }
         if (e instanceof Ast.Var v) return id(v.name());
