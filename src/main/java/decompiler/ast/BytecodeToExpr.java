@@ -694,7 +694,7 @@ public final class BytecodeToExpr {
                 stack.clear();
             }
             // --- GOTO: терминатор без значения; стек очищаем ---
-            case Opcodes.GOTO -> stack.clear();
+            case Opcodes.GOTO -> { }
             default -> {
                 // Незнакомый опкод нельзя «потреблять» молча: стек разъедется,
                 // и дальше получится тихо неверный код.

@@ -55,7 +55,8 @@ public final class StructureToAst {
     private final java.util.Map<Integer, List<Ast.Expr>> blockResults = new java.util.HashMap<>();
     private final java.util.List<PhiSite> phiSites = new java.util.ArrayList<>();
     private final java.util.Set<Ast.VarDecl> phiDecls = new java.util.LinkedHashSet<>();
-    private int phiCounter;    private final java.util.Map<Integer, Integer> catchEmits = new java.util.HashMap<>();
+    private int phiCounter;
+    public static final java.util.List<String> PHI_DEBUG = java.util.Collections.synchronizedList(new java.util.ArrayList<>());    private final java.util.Map<Integer, Integer> catchEmits = new java.util.HashMap<>();
 
     /** Диагностика прогона (сбрасывается Main). */
     public static final java.util.concurrent.atomic.AtomicInteger HANDLER_DUPLICATES =
@@ -1148,8 +1149,7 @@ public final class StructureToAst {
     private void lowerPhi() {
         for (PhiSite s : phiSites) {
             BasicBlock b = blocks.get(s.block);
-            List<BasicBlock> preds = b.getPredecessors();
-            if (preds.isEmpty()) {
+            List<BasicBlock> preds = b.getPredecessors();            if (preds.isEmpty()) {
                 throw new UndecompilableException(
                         UndecompilableException.Kind.JOIN_DEPTH, "phi without predecessors");
             }
