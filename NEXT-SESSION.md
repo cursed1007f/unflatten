@@ -156,3 +156,12 @@ lost block: 13 BB + 2 handler = 15 (s40) -> 16 BB + 2 handler = 18 (s41); +3 р�
 - **other 101** = 41 multi-block, 21 pending new, 21 lambda captures,
   11 switch key prelude, 3 switch default, 3 stray <init>, 1 multiple handlers.
 - Инструментация: underflow из blockToStmt/condFrom помечается `b=`/`cond`.
+## Сессия s52 — sanitizer идентификаторов (не закоммичено)
+
+**Найдено:** else.without.if (1) — каскад от поля с именем `for` (`private long for;`), т.е. ключевое слово в роли идентификатора (`IrG`).
+
+**Сделано (printer):** `JavaPrinter.id()` — простое имя-ключевое слово или невалидный идентификатор получает суффикс `$`; применяется к объявлению поля, методу, локальным, `Ast.Var`/`FieldAccess`/вызову. `this`/`super` и квалифицированные имена (`a.b`) не трогаются.
+
+**Эффект:** `else.without.if` 1 → 0, `expected` 38 → 24. Метрики декомпиляции без изменений: 133/1942, survived 1809, underflow 5, lost block 18, балл 381, три jar идентичны; матрица s48→s52: 1942 строки, 0 переходов.
+
+**Гейт (честные числа):** bad 126, real 73. Промежуточные 119/58 были искажены: `this` → `this$` давал нерезолвимые символы, которые отфильтровывались как каскад. После фикса всплыли настоящие type-ошибки (`prob.found.req` 612 → 723), в основном в `IrG`.

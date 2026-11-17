@@ -54,7 +54,7 @@ public final class JavaClassPrinter {
                 if (!isEnumConstant(f)) {
                     sb.append("    ").append(fieldModifiers(f)).append(' ')
                             .append(Ast.friendlyType(f.desc)).append(' ')
-                            .append(f.name).append(";\n");
+                            .append(JavaPrinter.id(f.name)).append(";\n");
                 }
             }
             if (!cn.fields.isEmpty()) sb.append("\n");
@@ -104,9 +104,9 @@ public final class JavaClassPrinter {
 
         // у конструктора нет возвращаемого типа: печатаем просто Имя(params)
         if (mn.name.equals("<init>")) {
-            sb.append(name);
+            sb.append(JavaPrinter.id(name));
         } else {
-            sb.append(name == null ? "" : ret(desc(ret)) + " " + name);
+            sb.append(name == null ? "" : ret(desc(ret)) + " " + JavaPrinter.id(name));
         }
         // параметры
         List<String> params = params(args, mn);

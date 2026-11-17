@@ -7,6 +7,21 @@ import java.util.List;
  * метода). Простое текстовое представление, достаточное для превью-вывода.
  */
 public final class JavaPrinter {
+    private static final java.util.Set<String> KEYWORDS = java.util.Set.of(
+        "abstract","assert","boolean","break","byte","case","catch","char","class","const","continue",
+        "default","do","double","else","enum","extends","final","finally","float","for","goto","if",
+        "implements","import","instanceof","int","interface","long","native","new","package","private",
+        "protected","public","return","short","static","strictfp","super","switch","synchronized","this",
+        "throw","throws","transient","try","void","volatile","while","_","true","false","null");
+
+    static String id(String n) {
+        if (n == null || n.isEmpty()) return n;
+        if ("this".equals(n) || "super".equals(n) || n.contains(".")) return n;
+        boolean ok = Character.isJavaIdentifierStart(n.charAt(0));
+        for (int i = 1; ok && i < n.length(); i++) ok = Character.isJavaIdentifierPart(n.charAt(i));
+        if (ok && !KEYWORDS.contains(n)) return n;
+        return n + "$";
+    }
 
     private final StringBuilder sb = new StringBuilder();
     private int indent = 0;
@@ -88,7 +103,7 @@ public final class JavaPrinter {
         } else if (s instanceof Ast.Block bl) {
             for (Ast.Stmt b : bl.body()) stmt(b);
         } else if (s instanceof Ast.VarDecl vd) {
-            pad(); sb.append(vd.type()).append(' ').append(vd.name()).append(";\n");
+            pad(); sb.append(vd.type()).append(' ').append(id(vd.name())).append(";\n");
         } else if (s instanceof Ast.Raw raw) {
             pad(); sb.append(raw.text()).append('\n');
         } else if (s instanceof Ast.Case ca) {
@@ -130,7 +145,7 @@ public final class JavaPrinter {
             if (v instanceof Long x) return x + "L";
             return String.valueOf(v);
         }
-        if (e instanceof Ast.Var v) return v.name();
+        if (e instanceof Ast.Var v) return id(v.name());
         if (e instanceof Ast.This t) return "this";
         if (e instanceof Ast.NullLit) return "null";
         if (e instanceof Ast.Binary b) {
@@ -160,7 +175,7 @@ public final class JavaPrinter {
         if (e instanceof Ast.Call c) {
             StringBuilder sb = new StringBuilder();
             if (c.target() != null) sb.append(expr(c.target())).append(".");
-            sb.append(c.name()).append("(");
+            sb.append(id(c.name())).append("(");
             for (int i = 0; i < c.args().size(); i++) {
                 if (i > 0) sb.append(", ");
                 sb.append(expr(c.args().get(i)));
@@ -168,7 +183,7 @@ public final class JavaPrinter {
             return sb.append(")").toString();
         }
         if (e instanceof Ast.Field f) {
-            return (f.target() != null ? expr(f.target()) + "." : "") + f.name();
+            return (f.target() != null ? expr(f.target()) + "." : "") + id(f.name());
         }
         if (e instanceof Ast.NewObject no) {
             String desc = no.desc();
