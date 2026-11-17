@@ -88,12 +88,13 @@ public final class QualityChecker {
         public CmpThisSite(int line, String text) { this.line = line; this.text = text; }
     }
 
-    // "iVar29 >= this", "this >= x" — но НЕ "this.size()", "this.length" (валидный
-    // доступ к члену). Смотрим на "this" как голый операнд сравнения: после "this"
-    // не должно идти '.' (member access) и до него не должно быть '.' (член справа).
+    // "iVar29 >= this", "this >= x" — реляционные сравнения с голым this (артефакт:
+// объект нельзя упорядочивать). `== this`/`!= this` сюда НЕ входят — это обычно
+// валидная identity-проверка (`o == this` в equals) или проверка null.
+// `this.field < x` тоже не флагаем: после this идёт '.' (доступ к члену).
     private static final Pattern CMP_THIS =
-            Pattern.compile("(?:^|[^\\w.])this\\s*([<>]=?|==|!=)\\s*(?!this\\.)[^\n.]?|"
-                          + "[^\\w.]\\S*\\s*([<>]=?|==|!=)\\s*this(?!\\.)");
+            Pattern.compile("\\bthis\\b\\s*[<>]=?\\s*[\\w(]|"
+                          + "[\\w)\\]]\\s*[<>]=?\\s*\\bthis\\b(?!\\.)");
 
     // arr[this], new double[this], foo[this] — но НЕ [this.field] (валидный this.member-индекс).
     // Границы [ ] не пересекают перевод строки (иначе ложные склейки через несколько строк).
