@@ -713,6 +713,48 @@ public final class BytecodeToExpr {
             objectMethods(id, args);
             return;
         }
+        // dev/andromeda/guard/LinkBootstrap.connect: цель вызова зашита в
+        // ConstantDynamic "<owner>\0<method>" (Base64 + xorshift-поток, алгоритм
+        // в самом LinkBootstrap.decode). tag 184 — INVOKESTATIC, иначе получатель
+        // первый аргумент desc (connect делает findVirtual с dropParameterTypes).
+        if (id.bsm != null && id.bsm.getOwner().endsWith("LinkBootstrap")
+                && "connect".equals(id.bsm.getName())
+                && id.bsmArgs.length >= 2
+                && id.bsmArgs[0] instanceof org.objectweb.asm.ConstantDynamic cd
+                && cd.getBootstrapMethod() != null
+                && "symbol".equals(cd.getBootstrapMethod().getName())
+                && cd.getBootstrapMethodArgumentCount() == 2
+                && cd.getBootstrapMethodArgument(0) instanceof String payload
+                && cd.getBootstrapMethodArgument(1) instanceof Integer key
+                && id.bsmArgs[1] instanceof Integer tag) {
+            String dec = decodeGuardString(payload, key);
+            int nul = dec.indexOf('\0');
+            if (nul > 0 && nul < dec.length() - 1) {
+                String owner = dec.substring(0, nul).replace('.', '/');
+                String name = dec.substring(nul + 1);
+                String retDesc = id.desc.substring(id.desc.indexOf(')') + 1);
+                String ownerName = Ast.friendlyType("L" + owner + ";");
+                Ast.Call call;
+                if (tag == 184) {
+                    call = new Ast.Call(null, ownerName + "." + name, args, true, retDesc);
+                } else if (!args.isEmpty()) {
+                    Ast.Expr recv = args.get(0);
+                    call = new Ast.Call(recv, name,
+                            new ArrayList<>(args.subList(1, args.size())), false, retDesc);
+                } else {
+                    throw new UndecompilableException(
+                            UndecompilableException.Kind.OTHER, "guard virtual without receiver");
+                }
+                // void-вызов — оператор, а не значение: иначе он остаётся на стеке
+                // и теряется из вывода (NativeCore.<clinit> -> load()).
+                if ("V".equals(retDesc)) {
+                    stmts.add(new Ast.ExprStmt(call));
+                } else {
+                    pushCat(call, catOfDesc(retDesc));
+                }
+                return;
+            }
+        }
         // StringConcatFactory: recipe + аргументы -> "a" + x + b ...
         if ("makeConcatWithConstants".equals(bsmName) && id.bsmArgs.length >= 1
                 && id.bsmArgs[0] instanceof String recipe) {
@@ -786,6 +828,19 @@ public final class BytecodeToExpr {
         String ret = id.desc.substring(id.desc.indexOf(')') + 1);
         Ast.Expr ph = placeholderFor(ret);
         if (ph != null) pushCat(ph, 1);
+    }
+
+    /** decode(String,int) из dev/andromeda/guard/LinkBootstrap: Base64 + xorshift32. */
+    private static String decodeGuardString(String b64, int key) {
+        byte[] b = java.util.Base64.getDecoder().decode(b64);
+        int st = key;
+        for (int i = 0; i < b.length; i++) {
+            st ^= st << 13;
+            st ^= st >>> 17;
+            st ^= st << 5;
+            b[i] ^= (byte) st;
+        }
+        return new String(b, java.nio.charset.StandardCharsets.UTF_8);
     }
 
     /** Собирает выражение конкатенации из StringConcat-рецепта и аргументов. */

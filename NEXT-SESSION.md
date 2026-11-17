@@ -42,6 +42,13 @@ exception-замыкании, матрица s11→s15 с clinit сошлась 
   остальные пустые (fallthrough). Double emit 2 → 0 (`_Pk`, `WWq` восстановлены).
   `default`, делящий тело с case, — явный bail `switch default shares case body`
   (у `k(BI)I`, `_jaixjV(BI)I` причина сменилась с underflow, новых потерь нет).
+- **LinkBootstrap.connect.** Восстановлен guard-indy: `bsmArgs[0]` — ConstantDynamic
+  `symbol` с парой (Base64, key); алгоритм `decode` (Base64 + xorshift32:
+  `st ^= st<<13; st ^= st>>>17; st ^= st<<5`, XOR по байтам) снят из байткода и
+  повторён в `BytecodeToExpr.decodeGuardString`. Строка `<owner>\0<method>`;
+  tag 184 — INVOKESTATIC (печатается `owner.method(...)`), иначе получатель —
+  первый аргумент desc. void-вызов эмитится `ExprStmt` (иначе терялся на стеке).
+  SlashW: `unknown bootstrap` 1036 → **0**, survived 3474 → 3858.
 
 ## Baseline `slash-obf-legit.jar` (P4 + S1 + S3)
 
@@ -65,11 +72,16 @@ exception-замыкании, матрица s11→s15 с clinit сошлась 
 
 Double emit 2 (`_Pk`/`WWq`) — switch-case дублирование, не fold.
 
-## SlashW (sW22, P4+S1+S3)
+## SlashW (sW24, guard восстановлен)
 
-820 классов, 5833 метода: undecompilable 2359 (40.4%), survived 3474, балл 683.
-underflow 279, lost block 452, double emit 0, dead code 0, missing 0,
-other 1628, `clinit` 59.
+820 классов, 5833 метода: undecompilable 1975 (33.9%), survived 3858, балл 687.
+underflow 419, lost block 725, double emit 0, dead code 0, missing 0,
+other 831, `clinit` 59.
+
+Рост underflow/lost block (279→419, 452→725) — не регресс: методы, которые
+раньше падали на первом же guard-indy, теперь декомпилируются дальше и
+вскрывают реальные дыры структуры. `rethrow-slot: -1=71`.
+`empty-roots=4` — те же четыре andromeda-метода.
 
 Диагностика:
 - `rethrow-slot: -2=0 gte0=0 -1=65` — `rethrow-dropped=0` реален: все 65
@@ -89,19 +101,17 @@ survived→bail **49**, net **66** = 1487−1421 ✓.
 
 ## Очередь
 
-1. **Double emit в switch** — `_Pk`/`WWq`, дедуп case-блоков/регионы, вернуть 0.
-2. **LinkBootstrap.connect** (SlashW) — разобрать bsmArgs/Handle, восстановить вызов.
-3. **javac-гейт + идемпотентность** (ин-процессный JavaCompiler, фильтр
+1. **javac-гейт + идемпотентность** (ин-процессный JavaCompiler, фильтр
    `cant.resolve`/`doesnt.exist`, категории missing return/unreachable/definite
    assignment; декомпил→рекомпил→декомпил→AST-diff).
-4. **ASM-фикстуры** (там же S2): opaque-true ромб с сайд-эффектом в else,
+2. **ASM-фикстуры** (там же S2): opaque-true ромб с сайд-эффектом в else,
    PUTFIELD на локале, cat-2 DUP2, nested try в handler'е, loop-header как entry,
    switch fallthrough, **assign+IF во вложенной ветви**. Если фикстура S2 не
    воспроизводит потерю prelude — recoverer корректен, инвариант не нужен.
-5. **S4 (disclose, не блокер).** record `equals` для float/double компонентов
+3. **S4 (disclose, не блокер).** record `equals` для float/double компонентов
    печатается через `Objects.equals`, а не `Float.compare` — семантика отличается
    для NaN/±0.0; зафиксировать в доках.
-6. **Дизайн-нота entry-stack** после фикстур.
+4. **Дизайн-нота entry-stack** после фикстур.
 
 ## Проверка
 
