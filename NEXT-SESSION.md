@@ -300,3 +300,10 @@ lost block: 13 BB + 2 handler = 15 (s40) -> 16 BB + 2 handler = 18 (s41); +3 р�
 **Пример (IYWw\\):** было `new int[2][0] = 20;`, стало `int[] arr0; arr0 = new int[2]; arr0[0] = 20;` и `int[][] arr2; arr2 = new int[2][]; arr2[0] = new int[2];`.
 
 **Метрики s95:** 133/1942, survived 1809, underflow 5, lost block 18, балл 381; три jar идентичны; матрица s81->s95 — 0 переходов; тесты зелёные.
+## Сессия s96 — объявления array-темпов на уровне метода (закоммичено 6580cd1)
+
+**Сделано:** `BytecodeToExpr.ARRAY_DECLS` собирает `VarDecl` массивных темпов за прогон; `StructureToAst` добавляет их к общему списку объявлений (вставка после super()/this() уже реализована). Объявления больше не попадают внутрь ветвей.
+
+**Эффект:** `bad` 97 -> **73**, `real` 62 -> **38**, `var.might.not.have.been.initialized` 27 -> **2**, `expected`/`not.stmt` ушли. Остаток: `array.req` 15, `cant.deref` 31, `prob.found.req` 188, `cant.access` 9.
+
+**Метрики s96:** 133/1942, survived 1809, underflow 5, lost block 18, балл 381; три jar идентичны; матрица s95->s96 — 0 переходов; тесты зелёные.
