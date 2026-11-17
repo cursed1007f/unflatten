@@ -135,3 +135,12 @@ CMPL-true; IFGE/IFGT — CMPG-true; IFEQ — никогда). Печать:
 s41: survived 1635 -> 1730, undecompilable 307 -> 212, cmp-bail 140 -> 0,
 underflow 59 -> 93, lost block 15 -> 18, балл 163 -> 238
 (deadIvar 111 + return0 16 — больше кода, больше метрик).
+### s41: сверка матрицы (140 переходов)
+
+140 cmp-методов s40 -> 140 переходов s40->s41:
+95 survived, 34 underflow, 6 multi-block (other), 1 switch default (other),
+1 pending new (other), 3 lost block: `It$FNKYJX$3494.C` (BB10),
+`IwLWbtaV$5561.d` (BB4), `IqYyGfVt$5189.yURPS` (BB12).
+lost block: 13 BB + 2 handler = 15 (s40) -> 16 BB + 2 handler = 18 (s41); +3 ровно
+эти три метода. `multi-block try range` — бакет `other`, не lost block.
+Парсер матрицы корректен: CSV lostBB 13/16 совпадает с выхлопом.
