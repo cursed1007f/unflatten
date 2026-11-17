@@ -106,6 +106,12 @@ public final class CfgBuilder {
         if (mn.tryCatchBlocks != null) {
             for (org.objectweb.asm.tree.TryCatchBlockNode tcb : mn.tryCatchBlocks) {
                 int hi = indexOfLabel(all, tcb.handler);
+                // Границы try-range — тоже лидеры: иначе вложенный try внутри
+                // handler'а начинается посреди блока и не виден структуре.
+                int si = indexOfLabel(all, tcb.start);
+                int ei = indexOfLabel(all, tcb.end);
+                if (si >= 0) leader[si] = true;
+                if (ei >= 0) leader[ei] = true;
                 if (hi >= 0) leader[hi] = true;
             }
         }

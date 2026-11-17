@@ -221,6 +221,7 @@ public final class StructureToAst {
             int catchCnt = catchEmits.getOrDefault(idx, 0);
             if (catchCnt > 1) HANDLER_DUPLICATES.addAndGet(catchCnt - 1);
             if (!reachable.contains(idx)) continue;
+            if (!hasRealInstruction(b)) continue; // пустой блок-граница
             if (normal > 1 && hasSideEffect(b)) {
                 throw new UndecompilableException(
                         UndecompilableException.Kind.DOUBLE_EMIT, "BB" + idx);

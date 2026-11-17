@@ -181,7 +181,7 @@ public class FixtureTest {
     }
 
     @Test
-    @org.junit.jupiter.api.Disabled("known gap: handler BB2 без catch (nested try) — phi не лечит, нужен catch-путь")
+    @org.junit.jupiter.api.Disabled("split по try-границам сделан; handler-тело всё ещё эмитится runHandlerBlock — нужна структурная конвертация")
     void nestedTryInHandler() {
         ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
         cw.visit(Opcodes.V11, Opcodes.ACC_PUBLIC, "T7", null, "java/lang/Object", null);
