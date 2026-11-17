@@ -41,6 +41,7 @@ public final class StructureAnalyzer {
         public final Set<Integer> covered;    // header + body
 
         Loop(int header, List<Integer> body, List<Integer> latches) {
+        System.err.println("LOOP h=" + header + " body=" + body + " latches=" + latches);
             this.header = header;
             this.body = body;
             this.latches = latches;
@@ -99,7 +100,13 @@ public final class StructureAnalyzer {
         body.add(h);
         // BFS/DFS от m в обратном направлении (по предшественникам) до h.
         // Идём по рёбрам графа от m к началу, пока не упрёмся в h.
-        List<Integer> work = new ArrayList<>();
+        List<Integer> latchSeeds = new ArrayList<>();
+        for (BasicBlock sb : blocks.get(h).getPredecessors()) {
+            int p = sb.index();
+            if (p != h && dominates(h, p)) latchSeeds.add(p);
+        }
+        if (!latchSeeds.contains(m)) latchSeeds.add(m);
+        List<Integer> work = new ArrayList<>(latchSeeds);
         work.add(m);
         while (!work.isEmpty()) {
             int v = work.remove(work.size() - 1);
