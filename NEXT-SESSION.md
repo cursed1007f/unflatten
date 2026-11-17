@@ -94,3 +94,22 @@ $env:JAVA_HOME='C:\Program Files\Java\jdk-21.0.12'; .\gradlew.bat --console=plai
 java -cp "build\classes\java\main;<asm 9.7.1>" decompiler.cli.Main <jar> --ast 1>sN-out.txt 2>sN-err.txt
 java -cp "..." decompiler.cli.Main <jar> --gate 1>gate-out.txt 2>gate-err.txt
 ```
+## Lost block 22 (s38): классификация
+
+Список (класс :: метод [деталь]): 20 × «BBn не эмитирован» (BB3 ×8, BB4 ×5,
+BB6 ×3, BB8/BB9/BB5/BB12 ×1) + 2 × «handler без catch» (`IprNDA$2397.dMUWHE`
+BB3, `skrdLr` BB9).
+
+Причина 20 «BBn» (подтверждено дампом `IAzR$zQG$6211.MHBxFR`):
+структура `block 0; loop(header=1){ block 2 }; block 15`, при том что в CFG
+BB2 → BB3 (ребро внутрь тела). Recoverer **обрывает тело цикла на первом блоке**
+(BB2), остальные блоки тела (BB3…) в структуру не попадают → normalEmits=0 →
+честный bail. Это не бухгалтерия условий и не entry-stack: дыра в enclosure
+тела цикла/ветвлений внутри него. Аналогичная картина у `IGDVkXd$8812.x`,
+`INAW$6302.oes$erN`, `IrDWgNkQy$1260.qeEzCF`, `IfrJYYSTS$6860.zjlWLnB`.
+
+Причина 2 handler-случаев: catch-путь вне структуры (P4 их поймал; отдельный класс).
+
+Решение: **disclose как known gap** — bail честный, тихой потери нет.
+Фикс относится к StructureRecoverer (enclosure тела цикла), отдельная задача,
+не entry-stack.
