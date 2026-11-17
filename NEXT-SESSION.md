@@ -354,3 +354,13 @@ lost block: 13 BB + 2 handler = 15 (s40) -> 16 BB + 2 handler = 18 (s41); +3 р�
 - `multiple handlers at try start`: 6
 
 **Вывод:** это ровно те же причины, что на slash-obf (pending new, switch key, multi-block, loop header, stray init, multiple handlers). Новых классов причин нет — декомпилятор универсален, поведение на независимом jar'е то же. Ничего чинить не нужно, это известные known gaps.
+## Сессия s104 — SpaceVisuals.jar через декомпилятор (+ ASM 9.11)
+
+**Проблема:** `SpaceVisuals.jar` содержит классы `major version 72` (Java 28); ASM 9.7.1 их не читал (то же 9.9/9.10). Обновил ASM до **9.11** (коммит 68a9789). Контроль: slash-obf-legit без изменений (133/1942, балл 381).
+
+**Результат (598 классов, 5178 методов):**
+- survived **4509** (87%), undecompilable **669** (lost block 172, other 494, underflow 3)
+- балл 1245 (deadIvar 599×2 + return0 47); `class-level errors: 0`
+- гейт: bad 233/598, real **122**; заметные коды: `is.preview=100` (preview-фичи), `cant.apply.symbols=207`, `ref.ambiguous=125`, `void.not.allowed.here=165`, `cant.deref=191`
+
+**Вывод:** декомпилятор работает на этом jar (87% survived, 0 крахов). Коды гейта во многом из-за preview-функций Java 28 и тяжёлых дженериков — не новые дефекты структурного прохода.
