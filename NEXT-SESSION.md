@@ -316,3 +316,12 @@ lost block: 13 BB + 2 handler = 15 (s40) -> 16 BB + 2 handler = 18 (s41); +3 р�
 **Следующий шаг:** не окно в 4 инструкции, а проход по стеку BasicInterpreter (тип элемента брать из кадра на позиции AALOAD), либо симметрично ALOAD через slotTypes на этапе AST.
 
 **Метрики s98:** 133/1942, survived 1809, underflow 5, lost block 18, балл 381; три jar идентичны; матрица s96->s98 — 0 переходов; тесты зелёные.
+## Сессия s99 — кадровый вариант отклонён (откачено до 4f43d7f)
+
+**Проверено:** `classifyArrayElements` на кадрах `BasicVerifier` (тип элемента из `Frame.getStack(sz-1)` на `AALOAD`). Результат хуже: bad 72 -> 73, real 38, array.req 15 без движения.
+
+**Причина:** для этих обфусцированных методов `tryAnalyze` с `BasicVerifier` возвращает `null` (падение анализатора), а фолбэк `BasicInterpreter` не даёт типов для ссылок — `getType()` пуст.
+
+**Откат:** `git checkout` TypeInference; дерево = 4f43d7f, гейт снова bad **72**, real 38, prob.found.req 187.
+
+**Следующий шаг (если продолжать):** не кадры, а символический проход типов по инструкциям с затравкой из `slotTypes` (ALOAD -> out[slot], ASTORE -> out[slot], AALOAD -> элемент, ANEWARRAY/NEWARRAY -> тип массива, invokes -> тип возврата). Это фактически расширение `StackSimulator`: он уже считает стек, но `ALOAD` всегда даёт `Object` — нужно связать его с типом слота.
