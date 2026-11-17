@@ -653,6 +653,7 @@ public final class StructureToAst {
             res.addAll(at, decls);
             normalizeBooleanLiterals(res);
             normalizeArrayTemps(res);
+            fixDeclTypes(res);
         }
         return res;
     }
@@ -694,6 +695,15 @@ public final class StructureToAst {
     }
 
     /** Тип массива для локалов/phi-темпов: из вызова с дескриптором-массивом и из соседних локалов. */
+    private static void fixDeclTypes(java.util.List<Ast.Stmt> res) {
+        walkStmts(res, l -> {
+            for (int i = 0; i < l.size(); i++) {
+                if (l.get(i) instanceof Ast.VarDecl d && d.type() != null && d.type().startsWith("[")) {
+                    l.set(i, new Ast.VarDecl(safeType(d.type()), d.name()));
+                }
+            }
+        });
+    }
     private static void normalizeArrayTemps(java.util.List<Ast.Stmt> res) {
         java.util.Map<String, String> decl = new java.util.HashMap<>();
         walkStmts(res, l -> {
@@ -768,21 +778,71 @@ public final class StructureToAst {
 
     /** Тип массива из дескриптора NewObject: "[I" или "Ljava/lang/Object;;[]". */
     private static String arrayTypeOfNew(String d) {
-        if (d == null) return null;
-        if (d.startsWith("[")) {
-            try {
-                return Ast.friendlyType(d);
-            } catch (RuntimeException e) {
-                return null;
+        if (d == null || d.isEmpty()) return null;
+        String s = d;
+        if (s.endsWith("[]") && !s.startsWith("[")) {
+            String base = s.substring(0, s.length() - 2);
+            if (base.startsWith("L") && base.endsWith(";")) {
+                return base.substring(1, base.length() - 1).replace('/', '.') + "[]";
             }
+            s = "[" + base;
         }
-        if (!d.endsWith("[]")) return null;
-        String base = d.substring(0, d.length() - 2);
-        if (base.startsWith("L") && base.endsWith(";")) {
-            return base.substring(1, base.length() - 1).replace('/', '.') + "[]";
+        if (!s.startsWith("[")) return null;
+        String comp = s.substring(1);
+        int dims = 1;
+        while (comp.startsWith("[")) {
+            comp = comp.substring(1);
+            dims++;
         }
-        if (base.length() == 1) return Ast.friendlyType("[" + base);
-        return base.replace('/', '.') + "[]";
+        String base;
+        if (comp.startsWith("L") && comp.endsWith(";")) {
+            base = comp.substring(1, comp.length() - 1).replace('/', '.');
+        } else if (comp.length() == 1) {
+            base = primitiveName(comp.charAt(0));
+            if (base == null) return null;
+        } else {
+            return null;
+        }
+        return base + "[]".repeat(dims);
+    }
+
+    /** Дескрипторное имя ("[I", "[I[]") -> валидный Java-тип ("int[]"). */
+    static String safeType(String t) {
+        if (t == null || t.isEmpty() || !t.startsWith("[")) return t;
+        int dims = 0;
+        int i = 0;
+        while (i < t.length() && t.charAt(i) == '[') {
+            dims++;
+            i++;
+        }
+        String rest = t.substring(i);
+        while (rest.endsWith("[]")) {
+            dims++;
+            rest = rest.substring(0, rest.length() - 2);
+        }
+        String base;
+        if (rest.startsWith("L") && rest.endsWith(";")) {
+            base = rest.substring(1, rest.length() - 1).replace('/', '.');
+        } else if (rest.length() == 1) {
+            base = primitiveName(rest.charAt(0));
+            if (base == null) return "Object";
+        } else {
+            return "Object";
+        }
+        return base + "[]".repeat(dims);
+    }
+    private static String primitiveName(char c) {
+        return switch (c) {
+            case 'I' -> "int";
+            case 'J' -> "long";
+            case 'F' -> "float";
+            case 'D' -> "double";
+            case 'Z' -> "boolean";
+            case 'B' -> "byte";
+            case 'C' -> "char";
+            case 'S' -> "short";
+            default -> null;
+        };
     }
     private static boolean isObjectish(String t) {
         return t == null || "Object".equals(t) || "java.lang.Object".equals(t);
