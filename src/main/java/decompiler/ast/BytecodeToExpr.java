@@ -45,6 +45,8 @@ public final class BytecodeToExpr {
     private SlotZeroResolver slotZero = SlotZeroResolver.none();
     /** Метод возвращает boolean (IRETURN 0/1 -> return false/true). */
     private boolean booleanReturn;
+    /** Внутреннее имя текущего класса (для super()/this() в конструкторах). */
+    private String classOwner;
 
     public BytecodeToExpr(Ast.VarNameResolver names, String[] slotTypes) {
         this(names, slotTypes, null);
@@ -66,6 +68,12 @@ public final class BytecodeToExpr {
     /** Признак, что метод возвращает boolean (IRETURN 0/1 -> return false/true). */
     public BytecodeToExpr booleanReturning(boolean b) {
         this.booleanReturn = b;
+        return this;
+    }
+
+    /** Внутреннее имя текущего класса — чтобы отличить super(...) от this(...). */
+    public BytecodeToExpr currentOwner(String owner) {
+        this.classOwner = owner;
         return this;
     }
 
@@ -488,6 +496,16 @@ public final class BytecodeToExpr {
                 stack.pop();
             }
             stack.push(merged);
+            return;
+        }
+
+        // --- конструкторный вызов на this: это super(...) или this(...) ---
+        // INVOKESPECIAL <init> на ALOAD 0 внутри конструктора — вызов родительского
+        // конструктора (owner != текущий класс) либо делегирование this(...).
+        // Печатать this.<init>(...) невалидно — эмитим super(...)/this(...).
+        if (m.name.equals("<init>") && target instanceof Ast.Var tv && "this".equals(tv.name())) {
+            String keyword = classOwner != null && classOwner.equals(m.owner) ? "this" : "super";
+            stmts.add(new Ast.ExprStmt(new Ast.Call(null, keyword, args, false, "V")));
             return;
         }
 

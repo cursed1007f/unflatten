@@ -40,6 +40,7 @@ public final class StructureToAst {
     private final StringDecryptor decryptor;
     private final ClassHierarchy hierarchy;
     private final SlotZeroResolver slotZero;
+    private final String classOwner; // внутреннее имя текущего класса (для super()/this())
 
     /** Р’С‹С‡РёСЃР»СЏРµС‚ РјР°РїРїРёРЅРі LabelNode -> РёРЅРґРµРєСЃ Р±Р»РѕРєР°. РњРµС‚РєР° РјРѕР¶РµС‚ Р±С‹С‚СЊ РІ Р»СЋР±РѕР№
      *  РїРѕР·РёС†РёРё Р±Р»РѕРєР° (РЅРµ С‚РѕР»СЊРєРѕ РїРµСЂРІРѕР№), С‚.Рє. try-range С‡Р°СЃС‚Рѕ РЅР°С‡РёРЅР°РµС‚СЃСЏ РІРЅСѓС‚СЂРё. */
@@ -86,6 +87,7 @@ public final class StructureToAst {
         this.labelToBlock = buildLabelMap(blocks);
         this.decryptor = decryptor;
         this.hierarchy = hierarchy;
+        this.classOwner = classOwner;
         // Версионно-точный резолвер слота 0 для instance-методов: по CFG решает,
         // является ли слот 0 в точке *LOAD this'ом или переиспользованным спилл-значением.
         this.slotZero = SlotZeroResolver.build(blocks, (method.access & Opcodes.ACC_STATIC) == 0);
@@ -282,7 +284,8 @@ public final class StructureToAst {
     private BytecodeToExpr newEmu() {
         return new BytecodeToExpr(names, slotTypes, decryptor)
                 .withSlotZero(slotZero)
-                .booleanReturning(isBooleanReturn(method.desc));
+                .booleanReturning(isBooleanReturn(method.desc))
+                .currentOwner(classOwner);
     }
 
     /** РЈСЃР»РѕРІРёРµ Р±Р»РѕРєР° (РґРѕ СѓСЃР»РѕРІРЅРѕРіРѕ РїРµСЂРµС…РѕРґР°). */
