@@ -652,6 +652,7 @@ public final class StructureToAst {
             int at = (!res.isEmpty() && isCtorDelegation(res.get(0))) ? 1 : 0;
             res.addAll(at, decls);
             normalizeBooleanLiterals(res);
+            normalizeArrayTemps(res);
         }
         return res;
     }
@@ -692,6 +693,57 @@ public final class StructureToAst {
         });
     }
 
+    /** Тип массива для локалов/phi-темпов: из вызова с дескриптором-массивом и из соседних локалов. */
+    private static void normalizeArrayTemps(java.util.List<Ast.Stmt> res) {
+        java.util.Map<String, String> decl = new java.util.HashMap<>();
+        walkStmts(res, l -> {
+            for (Ast.Stmt s : l) if (s instanceof Ast.VarDecl d) decl.put(d.name(), d.type());
+        });
+        java.util.Set<String> changed = new java.util.HashSet<>();
+        for (int round = 0; round < 3; round++) {
+            final boolean[] any = {false};
+            walkStmts(res, l -> {
+                for (Ast.Stmt s : l) {
+                    if (!(s instanceof Ast.Assign a) || !(a.target() instanceof Ast.Var t)) continue;
+                    String cur = decl.get(t.name());
+                    String src = null;
+                    String srcType = null;
+                    if (a.value() instanceof Ast.Var v) {
+                        src = v.name();
+                        srcType = decl.get(v.name());
+                    }
+                    if (isObjectish(cur) && srcType != null && srcType.endsWith("[]")) {
+                        decl.put(t.name(), srcType);
+                        changed.add(t.name());
+                        any[0] = true;
+                    } else if (cur != null && cur.endsWith("[]") && src != null && isObjectish(srcType)) {
+                        decl.put(src, cur);
+                        changed.add(src);
+                        any[0] = true;
+                    } else if (isObjectish(cur) && a.value() instanceof Ast.Call c
+                            && c.retDesc() != null && c.retDesc().startsWith("[")) {
+                        decl.put(t.name(), Ast.friendlyType(c.retDesc()));
+                        changed.add(t.name());
+                        any[0] = true;
+                    }
+                }
+            });
+            if (!any[0]) break;
+        }
+        if (changed.isEmpty()) return;
+        walkStmts(res, l -> {
+            for (int i = 0; i < l.size(); i++) {
+                if (l.get(i) instanceof Ast.VarDecl d && changed.contains(d.name())
+                        && !"boolean".equals(d.type())) {
+                    l.set(i, new Ast.VarDecl(decl.get(d.name()), d.name()));
+                }
+            }
+        });
+    }
+
+    private static boolean isObjectish(String t) {
+        return t == null || "Object".equals(t) || "java.lang.Object".equals(t);
+    }
     private static void walkStmts(java.util.List<Ast.Stmt> list, java.util.function.Consumer<java.util.List<Ast.Stmt>> visit) {
         visit.accept(list);
         for (Ast.Stmt s : list) {
@@ -1217,9 +1269,15 @@ public final class StructureToAst {
         List<Ast.Expr> out = new ArrayList<>();
         for (int i = 0; i < want.size(); i++) {
             StackValue v = want.get(i);
+            String vt = v.type();
+            if (("Object".equals(vt) || "java.lang.Object".equals(vt)) && v.slot() >= 0
+                    && v.slot() < slotTypes.length && slotTypes[v.slot()] != null
+                    && slotTypes[v.slot()].endsWith("[]")) {
+                vt = slotTypes[v.slot()];
+            }
             Ast.Var t = new Ast.Var("t" + blockIndex + "_" + i);
-            phiDecls.add(new Ast.VarDecl(v.type(), t.name()));
-            phiSites.put(blockIndex + "_" + i, new PhiSite(blockIndex, i, v.type(), t));
+            phiDecls.add(new Ast.VarDecl(vt, t.name()));
+            phiSites.put(blockIndex + "_" + i, new PhiSite(blockIndex, i, vt, t));
             PHI_SITES.incrementAndGet();
             out.add(t);
         }
