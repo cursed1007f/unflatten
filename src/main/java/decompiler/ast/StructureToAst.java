@@ -649,8 +649,16 @@ public final class StructureToAst {
                 decls.add(new Ast.VarDecl(type, e.getValue()));
             }
             // В конструкторе super()/this() обязан идти первым — вставляем после него.
-            int at = (!res.isEmpty() && isCtorDelegation(res.get(0))) ? 1 : 0;
-            res.addAll(at, decls);
+            java.util.List<Ast.Stmt> target = res;
+            if (res.size() == 1 && res.get(0) instanceof Ast.Block only) target = only.body();
+            int at = 0;
+            for (int i = 0; i < target.size(); i++) {
+                if (isCtorDelegation(target.get(i))) {
+                    at = i + 1;
+                    break;
+                }
+            }
+            target.addAll(at, decls);
             normalizeBooleanLiterals(res);
             normalizeArrayTemps(res);
             fixDeclTypes(res);
