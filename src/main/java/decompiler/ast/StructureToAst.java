@@ -60,6 +60,7 @@ public final class StructureToAst {
     private final java.util.Set<Ast.VarDecl> phiDecls = new java.util.LinkedHashSet<>();
     private int phiCounter;
     public static final java.util.List<String> PHI_DEBUG = java.util.Collections.synchronizedList(new java.util.ArrayList<>());    private final java.util.Map<Integer, Integer> catchEmits = new java.util.HashMap<>();
+    private int catchCounter;
 
     /** Диагностика прогона (сбрасывается Main). */
     public static final java.util.concurrent.atomic.AtomicInteger HANDLER_DUPLICATES =
@@ -958,8 +959,11 @@ public final class StructureToAst {
         }
         // try-body реально попадёт в вывод — теперь эмиссию можно считать.
         normalEmits.merge(blockIndex, 1, Integer::sum);
+        String cvName = catchCounter == 0 ? "e" : "e" + catchCounter;
+        catchCounter++;
+        Ast.Var cv = new Ast.Var(cvName);
         List<Ast.Stmt> catchBody = handlerBlock < blocks.size()
-                ? runHandlerBlock(handlerBlock) : new ArrayList<>();
+                ? runHandlerBlock(handlerBlock, cvName) : new ArrayList<>();
         if (handlerBlock < blocks.size()) {
             for (BasicBlock succ : blocks.get(handlerBlock).getSuccessors()) {
                 if (!startsTry(succ.index())) continue;
@@ -973,7 +977,6 @@ public final class StructureToAst {
         switchConsumed.add(handlerBlock);
 
         String type = match.type; // РјРѕР¶РµС‚ Р±С‹С‚СЊ null (finally) вЂ” РЅР° СЌС‚РѕРј СЌС‚Р°РїРµ РїСЂРѕСЃС‚Рѕ РґРµС„РѕР»С‚
-        Ast.Var cv = new Ast.Var("e");
         return new Ast.TryCatch(tryBody, type, cv, catchBody);
     }
 
@@ -1119,12 +1122,12 @@ public final class StructureToAst {
      * Эмиссия catch-блока: на входе handler'а стек ровно [exception], поэтому
      * стартуем с {@code e} — иначе {@code ATHROW} (rethrow) терялся молча.
      */
-    private List<Ast.Stmt> runHandlerBlock(int blockIndex) {
+    private List<Ast.Stmt> runHandlerBlock(int blockIndex, String varName) {
         catchEmits.merge(blockIndex, 1, Integer::sum);
         BasicBlock bb = blocks.get(blockIndex);
         BytecodeToExpr emu = newEmu();
         List<AbstractInsnNode> all = new ArrayList<>(bb.getInstructions());
-        return emu.runBlock(all, false, List.of(new Ast.Var("e")));
+        return emu.runBlock(all, false, List.of(new Ast.Var(varName)));
     }
 
     private List<Ast.Stmt> blockToStmt(int blockIndex) {
