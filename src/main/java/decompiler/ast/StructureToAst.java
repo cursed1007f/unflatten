@@ -98,7 +98,51 @@ public final class StructureToAst {
         List<Ast.Stmt> out = new ArrayList<>();
         convertNode(root, out);
         // Убираем мёртвые присваивания примитив-локалям (iVarN = const, нечитаемые).
-        return DeadStores.eliminate(out);
+        List<Ast.Stmt> res = DeadStores.eliminate(out);
+        // Гарантия валидного Java: non-void метод, в котором восстановитель структуры
+        // потерял return (diamond-тернарники и т.п.), получает завершающий return <default>.
+        String ret = method.desc.substring(method.desc.indexOf(')') + 1);
+        if (!"V".equals(ret) && !containsReturn(res) && !endsWithThrow(res)) {
+            res.add(new Ast.Return(defaultValue(ret)));
+        }
+        return res;
+    }
+
+    private static boolean containsReturn(List<Ast.Stmt> stmts) {
+        if (stmts == null) return false;
+        for (Ast.Stmt s : stmts) if (containsReturn(s)) return true;
+        return false;
+    }
+
+    private static boolean containsReturn(Ast.Stmt s) {
+        if (s instanceof Ast.Return) return true;
+        if (s instanceof Ast.If i) return containsReturn(i.thenBranch()) || containsReturn(i.elseBranch());
+        if (s instanceof Ast.While w) return containsReturn(w.body());
+        if (s instanceof Ast.Switch sw) {
+            for (Ast.Case c : sw.cases()) if (containsReturn(c.body())) return true;
+            return containsReturn(sw.defaultBranch());
+        }
+        if (s instanceof Ast.TryCatch tc) return containsReturn(tc.tryBody()) || containsReturn(tc.catchBody());
+        if (s instanceof Ast.Block b) return containsReturn(b.body());
+        return false;
+    }
+
+    private static boolean endsWithThrow(List<Ast.Stmt> stmts) {
+        if (stmts == null || stmts.isEmpty()) return false;
+        Ast.Stmt last = stmts.get(stmts.size() - 1);
+        return last instanceof Ast.ExprStmt es && es.expr() instanceof Ast.Call c && "throw".equals(c.name());
+    }
+
+    private static Ast.Expr defaultValue(String ret) {
+        if (ret.isEmpty()) return new Ast.NullLit();
+        return switch (ret.charAt(0)) {
+            case 'Z' -> new Ast.Literal(false);
+            case 'B', 'C', 'S', 'I' -> new Ast.Literal(0);
+            case 'J' -> new Ast.Literal(0L);
+            case 'F' -> new Ast.Literal(0.0f);
+            case 'D' -> new Ast.Literal(0.0d);
+            default -> new Ast.NullLit();
+        };
     }
 
     private void convertNode(StructureNode node, List<Ast.Stmt> out) {
