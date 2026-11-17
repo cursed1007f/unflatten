@@ -53,7 +53,7 @@ public final class JavaClassPrinter {
             String selfDesc = "L" + cn.name + ";";
             for (FieldNode f : cn.fields) {
                 if (isEnumConstant(f) && selfDesc.equals(f.desc)) {
-                    consts.add(JavaPrinter.id(f.name));
+                    consts.add(JavaPrinter.id(f.name) + enumCtorArgs(cn));
                 }
             }
             if (!consts.isEmpty()) {
@@ -114,7 +114,9 @@ public final class JavaClassPrinter {
                 : mn.name.equals("<clinit>") ? null : mn.name;
         // clinit (static init) печатаем как блок
         if (mn.name.equals("<clinit>")) {
-            return staticInitBlock(mn, decryptor, cn.name, hierarchy);
+            String init = staticInitBlock(mn, decryptor, cn.name, hierarchy);
+            if ((cn.access & Opcodes.ACC_ENUM) != 0) init = dropEnumConstantStores(init, cn);
+            return init;
         }
 
         // у конструктора нет возвращаемого типа: печатаем просто Имя(params)
@@ -232,6 +234,52 @@ public final class JavaClassPrinter {
         return i >= 0 ? internal.substring(i + 1) : internal;
     }
 
+    /** Убирает из <clinit> присваивания константам enum и синтетическому $VALUES. */
+    private static String dropEnumConstantStores(String body, ClassNode cn) {
+        java.util.Set<String> names = new java.util.HashSet<>();
+        String selfDesc = "L" + cn.name + ";";
+        for (FieldNode f : cn.fields) {
+            if (isEnumConstant(f) && selfDesc.equals(f.desc)) names.add(JavaPrinter.id(f.name));
+        }
+        names.add("$VALUES");
+        StringBuilder out = new StringBuilder();
+        for (String line : body.split("\n", -1)) {
+            String t = line.trim();
+            boolean drop = false;
+            for (String n : names) {
+                if (t.startsWith(n + " = ") && t.endsWith(";")) {
+                    drop = true;
+                    break;
+                }
+            }
+            if (!drop) out.append(line).append('\n');
+        }
+        return out.toString();
+    }
+    /** "()" или "(null, 0)" по дескриптору конструктора enum. */
+    private static String enumCtorArgs(ClassNode cn) {
+        Type[] best = new Type[0];
+        for (MethodNode m : cn.methods) {
+            if (!m.name.equals("<init>")) continue;
+            Type[] a = Type.getArgumentTypes(m.desc);
+            if (a.length > best.length) best = a;
+        }
+        if (best.length == 0) return "";
+        StringBuilder sb = new StringBuilder("(");
+        for (int i = 0; i < best.length; i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(switch (best[i].getSort()) {
+                case Type.INT, Type.BYTE, Type.SHORT -> "0";
+                case Type.LONG -> "0L";
+                case Type.FLOAT -> "0.0f";
+                case Type.DOUBLE -> "0.0";
+                case Type.BOOLEAN -> "false";
+                case Type.CHAR -> "(char) 0";
+                default -> "null";
+            });
+        }
+        return sb.append(")").toString();
+    }
     private static boolean isEnumConstant(FieldNode f) {
         return (f.access & (Opcodes.ACC_ENUM | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL))
                 == (Opcodes.ACC_ENUM | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL);
