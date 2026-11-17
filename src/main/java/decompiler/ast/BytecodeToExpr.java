@@ -464,6 +464,12 @@ public final class BytecodeToExpr {
                 Ast.Expr v = pop();
                 // boolean-метод: IRETURN 0/1 -> return false/true (вместо return Literal(0))
                 if (booleanReturn && n.getOpcode() == Opcodes.IRETURN) v = boolLit(v, true);
+                // ARETURN с числовым литералом = потерянное значение (нельзя вернуть int
+                // из объектного метода) — эмитим return null вместо return 0.
+                if (n.getOpcode() == Opcodes.ARETURN && v instanceof Ast.Literal l
+                        && l.value() instanceof Number) {
+                    v = new Ast.NullLit();
+                }
                 stmts.add(new Ast.Return(v));
                 terminated = true;
                 stack.clear(); // очистка после return — значение "протекать" не должно
