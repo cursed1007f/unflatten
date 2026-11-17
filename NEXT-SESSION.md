@@ -253,3 +253,12 @@ lost block: 13 BB + 2 handler = 15 (s40) -> 16 BB + 2 handler = 18 (s41); +3 р�
 **Следующий шаг:** в `staticInitBlock` (или в StructureToAst для enum) выкидывать присваивания полям-константам enum; тогда 145 должно уйти.
 
 **Метрики s77:** 133/1942, survived 1809, underflow 5, lost block 18, балл 381; три jar идентичны; матрица s76->s77 — 0 переходов; тесты зелёные; bad 113, real 74.
+## Сессия s79 — enum-константы с аргументами (закоммичено 2dd7449)
+
+**Сделано:** `dropEnumConstantStores` убирает из `<clinit>` присваивания константам enum и синтетическому ``; `enumCtorArgs` печатает `NAME(null, 0)` по дескриптору самого «широкого» конструктора (String/int/long/float/double/boolean/char/reference).
+
+**Эффект:** `enum.cant.be.instantiated` 145 -> **0**, `cant.assign.val.to.var` 145 -> **0**, `cant.apply.symbol` 155 -> **2**, gate `real` 74 -> **72**.
+
+**Осталось (обнаружено после того, как enum стал парситься):** `unexpected.type` 253 (было 100), `array.req` 2, `expected` 24, `not.stmt` 9, `call.must.be.first.stmt.in.ctor` 15.
+
+**Метрики s79:** 133/1942, survived 1809, underflow 5, lost block 18, балл 381; три jar идентичны; матрица s77->s79 — 0 переходов; тесты зелёные.
