@@ -64,7 +64,7 @@ public final class JavacGate {
             }
             if (code.contains("underscore")) continue;
             codes.add(code);
-            if (samples.size() < 3) samples.add(code + ":" + d.getLineNumber());
+            if (samples.size() < 12) samples.add(code + ":" + d.getLineNumber());
         }
         List<String> realCodes = new ArrayList<>();
         for (String c : codes) {

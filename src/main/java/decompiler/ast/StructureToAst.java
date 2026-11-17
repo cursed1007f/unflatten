@@ -730,7 +730,26 @@ public final class StructureToAst {
             });
             if (!any[0]) break;
         }
-        if (changed.isEmpty()) return;
+        java.util.Set<String> usedAsArray = new java.util.HashSet<>();
+        java.util.Set<String> primitiveWrite = new java.util.HashSet<>();
+        walkStmts(res, l -> {
+            for (Ast.Stmt st : l) {
+                if (st instanceof Ast.Assign as2 && as2.target() instanceof Ast.Binary bt
+                        && "[]=".equals(bt.op()) && bt.left() instanceof Ast.Var tv) {
+                    usedAsArray.add(tv.name());
+                    if (as2.value() instanceof Ast.Literal li && !(li.value() instanceof Boolean)
+                            && !(li.value() instanceof String)) {
+                        primitiveWrite.add(tv.name());
+                    }
+                }
+            }
+        });
+        for (String nm : usedAsArray) {
+            if (!primitiveWrite.contains(nm) && isObjectish(decl.get(nm)) && !"boolean".equals(decl.get(nm))) {
+                decl.put(nm, "Object[]");
+                changed.add(nm);
+            }
+        }        if (changed.isEmpty()) return;
         walkStmts(res, l -> {
             for (int i = 0; i < l.size(); i++) {
                 if (l.get(i) instanceof Ast.VarDecl d && changed.contains(d.name())
@@ -741,6 +760,25 @@ public final class StructureToAst {
         });
     }
 
+    /** Тип массива из дескриптора NewObject: "[I" или "Ljava/lang/Object;;[]". */
+    private static String arrayTypeOfNew(String d) {
+        if (d == null) return null;
+        if (d.startsWith("[")) {
+            try {
+                return Ast.friendlyType(d);
+            } catch (RuntimeException e) {
+                return null;
+            }
+        }
+        if (!d.endsWith("[]")) return null;
+        String base = d.substring(0, d.length() - 2);
+        if (base.startsWith("L")) {
+            int sc = base.indexOf(';');
+            String cn = sc > 0 ? base.substring(1, sc) : base.substring(1);
+            return cn.replace('/', '.') + "[]";
+        }
+        return base + "[]";
+    }
     private static boolean isObjectish(String t) {
         return t == null || "Object".equals(t) || "java.lang.Object".equals(t);
     }
