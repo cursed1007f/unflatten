@@ -233,14 +233,39 @@ public final class TypeInference {
         for (int i = 0; i < insns.length; i++) {
             if (insns[i].getOpcode() != Opcodes.ASTORE) continue;
             int var = ((VarInsnNode) insns[i]).var;
-            String t = arrayTypeOf(previousReal(insns, i));
+            String t = arrayTypeOf(previousReal(insns, i), out);
             if (t != null && (!isObjectType(t) || isObjectType(out[var]))) out[var] = t;
         }
     }
 
     /** Тип массива, создаваемого инструкцией, либо null. */
-    private static String arrayTypeOf(AbstractInsnNode n) {
+    private static String arrayTypeOf(AbstractInsnNode n, String[] out) {
+        try {
+            return arrayTypeOfRaw(n, out);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static String arrayTypeOfRaw(AbstractInsnNode n, String[] out) {
         if (n == null) return null;
+        if (n instanceof MethodInsnNode mi) {
+            Type r = Type.getReturnType(mi.desc);
+            return r.getSort() == Type.ARRAY ? friendly(r) : null;
+        }
+        if (n instanceof FieldInsnNode fi) {
+            Type r = Type.getType(fi.desc);
+            return r.getSort() == Type.ARRAY ? friendly(r) : null;
+        }
+        if (n instanceof org.objectweb.asm.tree.LdcInsnNode ld && ld.cst instanceof Type ct
+                && ct.getSort() == Type.ARRAY) {
+            return friendly(ct);
+        }
+        if (n instanceof VarInsnNode av && av.getOpcode() == Opcodes.ALOAD && out != null
+                && av.var >= 0 && av.var < out.length && out[av.var] != null
+                && out[av.var].endsWith("[]")) {
+            return out[av.var];
+        }
         return switch (n.getOpcode()) {
             case Opcodes.NEWARRAY -> switch (((org.objectweb.asm.tree.IntInsnNode) n).operand) {
                 case Opcodes.T_BOOLEAN -> "boolean[]";
@@ -256,6 +281,10 @@ public final class TypeInference {
             case Opcodes.ANEWARRAY -> {
                 String d = ((org.objectweb.asm.tree.TypeInsnNode) n).desc;
                 yield Ast.friendlyType(d.startsWith("[") ? "[" + d : "[L" + d + ";");
+            }
+            case Opcodes.CHECKCAST -> {
+                Type ct = Type.getType(((org.objectweb.asm.tree.TypeInsnNode) n).desc);
+                yield ct.getSort() == Type.ARRAY ? friendly(ct) : null;
             }
             case Opcodes.MULTIANEWARRAY ->
                     Ast.friendlyType(((org.objectweb.asm.tree.MultiANewArrayInsnNode) n).desc);
