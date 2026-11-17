@@ -61,6 +61,7 @@ public final class Main {
         boolean structureMode = false;
         boolean astMode = false;
         boolean detectMode = false;
+        boolean gateMode = false;
         String exportDir = null;
         Path keyPath = null;
         for (int i = 1; i < args.length; i++) {
@@ -70,6 +71,7 @@ public final class Main {
             if (args[i].equals("--structure")) structureMode = true;
             if (args[i].equals("--ast")) astMode = true;
             if (args[i].equals("--detect")) detectMode = true;
+            if (args[i].equals("--gate")) gateMode = true;
             if (args[i].equals("--export") && i + 1 < args.length) {
                 exportDir = args[i + 1];
                 i++;
@@ -130,8 +132,8 @@ public final class Main {
             if (exportDir != null) {
                 var res = JavaExporter.export(jar, Path.of(exportDir), decryptor, hierarchy);
                 System.err.printf("Exported %d class(es) (errors=%d) to %s%n", res.classes, res.errors, res.outDir);
-            } else if (astMode) {
-                int n = runAst(jar, decryptor, hierarchy);
+            } else if (astMode || gateMode) {
+                int n = runAst(jar, decryptor, hierarchy, gateMode);
                 System.err.printf("Java AST generated for %d class(es) from %s%n", n, jar);
             } else if (structureMode) {
                 int n = runStructure(jar);
@@ -259,10 +261,14 @@ public final class Main {
     }
 
     /** Генерация Java-кода: печать полного класса (поля + методы через пайплайн). */
-    private static int runAst(Path jar, StringDecryptor decryptor, ClassHierarchy hierarchy) throws Exception {
+    private static int runAst(Path jar, StringDecryptor decryptor, ClassHierarchy hierarchy,
+                              boolean gateMode) throws Exception {
         final int[] classes = {0};
         final int[] classErrors = {0};
         final int[] methodsWithCode = {0};
+        final int[] gateClasses = {0};
+        final int[] gateBad = {0};
+        final java.util.Map<String, Integer> gateCodes = new java.util.TreeMap<>();
         // Сброс диагностики прогона (статическая, чтобы не тащить счётчики через API).
         decompiler.ast.StructureToAst.HANDLER_DUPLICATES.set(0);
         decompiler.ast.StructureToAst.EMPTY_ROOTS.set(0);
@@ -285,7 +291,17 @@ public final class Main {
             System.out.println("// ===== " + display + ".class =====");
             try {
                 String java = JavaClassPrinter.printClass(cn, decryptor, hierarchy);
-                System.out.print(java);
+                if (gateMode) {
+                    gateClasses[0]++;
+                    decompiler.ast.JavacGate.Result gr =
+                            decompiler.ast.JavacGate.check(display, java, jar.toString());
+                    if (!gr.ok()) {
+                        gateBad[0]++;
+                        for (String gc : gr.codes()) gateCodes.merge(gc, 1, Integer::sum);
+                    }
+                } else {
+                    System.out.print(java);
+                }
                 QualityChecker.Report rep = QualityChecker.scan(java);
                 rep.className = display;
                 if (!rep.cmpThisSites.isEmpty() && siteBudget[0]-- > 0) rep.printCmpThisSites();
@@ -299,6 +315,10 @@ public final class Main {
             classes[0]++;
         });
         q.classErrors = classErrors[0];
+        if (gateMode) {
+            System.err.println("gate: classes=" + gateClasses[0] + " bad=" + gateBad[0]
+                    + " codes=" + gateCodes);
+        }
         System.err.println(q.summary());
         System.err.println(String.format("methods: total=%d survived=%d undecompilable=%d",
                 methodsWithCode[0], methodsWithCode[0] - q.undecompilable, q.undecompilable));
