@@ -192,15 +192,20 @@ public final class BytecodeToExpr {
      * блок-предикат оканчивается условным переходом, который оставляет на стеке
      * сравнение.
      */
-    public Ast.Expr runExpr(List<AbstractInsnNode> insns) {
+        public Ast.Expr runExpr(List<AbstractInsnNode> insns) {
+        return runExpr(insns, List.of());
+    }
+
+    /** То же, но со стартовым стеком (entry-stack блока-условия). */
+    public Ast.Expr runExpr(List<AbstractInsnNode> insns, List<Ast.Expr> entryStack) {
         stack.clear();
         categories.clear();
         stmts.clear();
         pendingNew.clear();
+        pendingSlots.clear();
         terminated = false;
-        for (AbstractInsnNode n : insns) {
-            consume(n, false);
-        }
+        for (Ast.Expr e : entryStack) pushCat(e, 1);
+        for (AbstractInsnNode n : insns) consume(n, false);
         return stack.isEmpty() ? null : stack.peek();
     }
 

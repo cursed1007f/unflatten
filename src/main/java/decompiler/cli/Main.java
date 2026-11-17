@@ -340,6 +340,7 @@ public final class Main {
                 decompiler.ast.StructureToAst.RETHROW_SLOT_GTE0.get(),
                 decompiler.ast.StructureToAst.RETHROW_SLOT_MINUS1.get()));
         System.err.println("clinit-return-stripped: " + decompiler.ast.JavaClassPrinter.CLINIT_RETURN_STRIPPED.get());
+        System.err.println("phi: sites=" + decompiler.ast.StructureToAst.PHI_SITES.get() + " injected=" + decompiler.ast.StructureToAst.PHI_INJECTED.get());
         if (!decompiler.ast.StructureToAst.EMPTY_ROOT_METHODS.isEmpty()) {
             System.err.println("empty-roots: " + decompiler.ast.StructureToAst.EMPTY_ROOT_METHODS);
         }
