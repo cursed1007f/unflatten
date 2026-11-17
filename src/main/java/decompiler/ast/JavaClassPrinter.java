@@ -211,14 +211,20 @@ public final class JavaClassPrinter {
             sb.append("class ");
         }
         sb.append(simpleName(cn.name));
-        if (cn.superName != null && !cn.superName.equals("java/lang/Object")
+        // Неявные суперклассы: enum всегда extends java.lang.Enum, record — java.lang.Record.
+        // В Java явный extends у enum/record недопустим — не печатаем.
+        boolean implicitSuper = "java/lang/Enum".equals(cn.superName)
+                || "java/lang/Record".equals(cn.superName);
+        if (cn.superName != null && !cn.superName.equals("java/lang/Object") && !implicitSuper
                 && (cn.access & Opcodes.ACC_INTERFACE) == 0) {
             sb.append(" extends ").append(Ast.friendlyType("L" + cn.superName + ";"));
         }
         if (cn.interfaces != null && !cn.interfaces.isEmpty()) {
             List<String> ifaces = new ArrayList<>();
             for (String i : cn.interfaces) ifaces.add(Ast.friendlyType("L" + i + ";"));
-            sb.append(cn.interfaces.size() > 1 ? " extends " : " implements ")
+            // interface extends интерфейсы; класс implements интерфейсы (независимо от числа).
+            boolean isIface = (cn.access & Opcodes.ACC_INTERFACE) != 0;
+            sb.append(isIface ? " extends " : " implements ")
                     .append(String.join(", ", ifaces));
         }
         return sb.toString();
