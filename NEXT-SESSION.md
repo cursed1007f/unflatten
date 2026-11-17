@@ -144,3 +144,15 @@ underflow 59 -> 93, lost block 15 -> 18, балл 163 -> 238
 lost block: 13 BB + 2 handler = 15 (s40) -> 16 BB + 2 handler = 18 (s41); +3 ровно
 эти три метода. `multi-block try range` — бакет `other`, не lost block.
 Парсер матрицы корректен: CSV lostBB 13/16 совпадает с выхлопом.
+## s43: раскладка underflow/lost/other
+
+- **underflow 93** = 92 × `cond` (оценка условия через `runExpr`) + 1 bare.
+  Значит условия **не подключены к entry-stack**: `condFrom`/`loopCond` считают
+  с пустого стека, хотя блок начинается со значений. Нормальные блоки дают 0
+  underflow — блоки уже wiring'нуты. Следующий шаг: seed условий через entryExprs.
+- **lost block 18** = 16 BB + 2 handler. BB: 6×BB3, 6×BB4, 1×BB12, 1×BB10,
+  1×BB6, 1×BB5. Из них 3 новых из cmp (BB10 `It$FNKYJX$3494.C`, BB4
+  `IwLWbtaV$5561.d`, BB12 `IqYyGfVt$5189.yURPS`), остальные — enclosure.
+- **other 101** = 41 multi-block, 21 pending new, 21 lambda captures,
+  11 switch key prelude, 3 switch default, 3 stray <init>, 1 multiple handlers.
+- Инструментация: underflow из blockToStmt/condFrom помечается `b=`/`cond`.

@@ -1197,7 +1197,17 @@ public final class StructureToAst {
         BytecodeToExpr emu = newEmu();
         List<AbstractInsnNode> all = new ArrayList<>(bb.getInstructions());
         List<Ast.Expr> entry = entryExprs(blockIndex);
-        List<Ast.Stmt> stmts = emu.runBlock(all, false, entry);
+        List<Ast.Stmt> stmts;
+        try {
+            stmts = emu.runBlock(all, false, entry);
+        } catch (UndecompilableException ex) {
+            if (ex.kind() == UndecompilableException.Kind.UNDERFLOW
+                    && "underflow".equals(ex.getMessage())) {
+                throw new UndecompilableException(UndecompilableException.Kind.UNDERFLOW,
+                        "b=" + blockIndex + " entry=" + entry.size());
+            }
+            throw ex;
+        }
         blockStmts.put(blockIndex, stmts);
         blockResults.put(blockIndex, emu.stackSnapshot());
         return stmts;
@@ -1228,7 +1238,16 @@ public final class StructureToAst {
         }
         // РїСЂРѕРіРѕРЅСЏРµРј СЃРѕ РІСЃРµРјРё РёРЅСЃС‚СЂСѓРєС†РёСЏРјРё вЂ” С‚РµСЂРјРёРЅР°Р»СЊРЅС‹Р№ СѓСЃР»РѕРІРЅС‹Р№ РїРµСЂРµС…РѕРґ
         // СЃС„РѕСЂРјРёСЂСѓРµС‚ СЃСЂР°РІРЅРµРЅРёРµ РЅР° СЃС‚РµРєРµ, runExpr РІРµСЂРЅС‘С‚ РµРіРѕ РІРµСЂС€РёРЅСѓ.
-        Ast.Expr e = emu.runExpr(prefix);
+        Ast.Expr e;
+        try {
+            e = emu.runExpr(prefix);
+        } catch (UndecompilableException ex) {
+            if (ex.kind() == UndecompilableException.Kind.UNDERFLOW
+                    && "underflow".equals(ex.getMessage())) {
+                throw new UndecompilableException(UndecompilableException.Kind.UNDERFLOW, "cond");
+            }
+            throw ex;
+        }
         lastCondStatements = emu.lastStatements();
         if (e == null) {
             // Условие не построено: фабриковать true нельзя (provenance).
