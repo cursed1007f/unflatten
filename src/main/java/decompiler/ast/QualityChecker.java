@@ -33,6 +33,9 @@ public final class QualityChecker {
         public int undecompilableClinit = 0;     // отказы в <clinit> (ExceptionInInitializerError)
         public int ctorInit = 0;                 // this.<init>(, oVar0.<init>(
         public int questionMark = 0;             // /* ? */
+        public int unsupportedOps = 0;           // UnsupportedOperationException
+        public int emptyBodies = 0;              // пустые тела { }
+        public int methods = 0;
         public int lineCount = 0;
         /** Имя класса (для диагностики мест). Заполняется вызывающим кодом перед scan. */
         public String className = "";
@@ -45,6 +48,15 @@ public final class QualityChecker {
             for (CmpThisSite s : cmpThisSites) {
                 System.out.println("// QSITE [" + className + "] >= this @ строка " + (s.line + 1) + ": " + s.text);
             }
+        }
+
+        /** Балл 0-100 (100 = чисто), нормирован на число методов. */
+        public int score100() {
+            int m = methods > 0 ? methods : 1;
+            double defects = score() + emptyBodies + unsupportedOps;
+            double per = defects / (double) m;
+            int s = (int) Math.round(100 - Math.min(100.0, per * 100.0));
+            return Math.max(0, s);
         }
 
         public int score() {
@@ -81,6 +93,9 @@ public final class QualityChecker {
             this.undecompilableClinit += o.undecompilableClinit;
             this.ctorInit += o.ctorInit;
             this.questionMark += o.questionMark;
+            this.unsupportedOps += o.unsupportedOps;
+            this.emptyBodies += o.emptyBodies;
+            this.methods += o.methods;
             this.lineCount += o.lineCount;
         }
 
@@ -123,6 +138,7 @@ public final class QualityChecker {
                     contextThisCompare, thisIndex, dumbThrow, castObject, newObject,
                     deadIVarConst, returnZero, ctorInit, questionMark));
             sb.append(String.format("БАЛЛ качества:       %d (ниже = лучше)%n", score()));
+            sb.append(String.format("БАЛЛ 0-100:          %d%n", score100()));
             return sb.toString();
         }
     }
@@ -161,6 +177,17 @@ public final class QualityChecker {
             Pattern.compile("\\(Object\\)\\s*\\S|\\bcast\\s*\\(Object\\)");
 
     // new Object( - пустой конструктор-заглушка
+    private static int countEmptyBodies(String java) {
+        int n = 0;
+        int i = 0;
+        while ((i = java.indexOf('{', i)) >= 0) {
+            int j = i + 1;
+            while (j < java.length() && Character.isWhitespace(java.charAt(j))) j++;
+            if (j < java.length() && java.charAt(j) == '}') n++;
+            i++;
+        }
+        return n;
+    }
     private static final Pattern NEW_OBJECT =
             Pattern.compile("new\\s+Object\\s*\\(");
 
@@ -217,6 +244,9 @@ public final class QualityChecker {
         r.undecompilableClinit = countAll(" @ <clinit>", java);
         r.ctorInit = count(CTOR_INIT, java);
         r.questionMark = java.contains("/* ? */") ? countAll("/* ? */", java) : 0;
+        r.unsupportedOps = countAll("UnsupportedOperationException", java);
+        r.emptyBodies = countEmptyBodies(java);
+
         return r;
     }
 

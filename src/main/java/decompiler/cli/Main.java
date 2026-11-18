@@ -319,6 +319,7 @@ public final class Main {
             classes[0]++;
         });
         q.classErrors = classErrors[0];
+        q.methods = methodsWithCode[0];
         if (gateMode) {
             System.err.println("gate: classes=" + gateClasses[0] + " bad=" + gateBad[0]
                     + " real=" + gateReal[0] + " codes=" + gateCodes);
