@@ -81,8 +81,32 @@ public final class ClassRenamer {
 
     /** Построить карту переименований (имя + пакет) по всему jar. */
     public static void build(Path jar) throws Exception {
+        build(jar, null);
+    }
+
+    /**
+     * То же, но со строковым дешифратором: строки класса из SVSB-блоба
+     * (нативный ключ) добавляются к сигналам имени и темы пакета.
+     */
+    public static void build(Path jar, StringDecryptor decryptor) throws Exception {
         Map<String, Signals> sigs = new LinkedHashMap<>();
-        JarParser.parse(jar, (p, entry, cn) -> sigs.put(cn.name, Signals.of(cn)));
+        JarParser.parse(jar, (p, entry, cn) -> sigs.put(cn.name, Signals.of(cn, decryptor)));
+
+        // Jar-wide индекс «строка → сколько классов её используют»: редкие строки
+        // информативнее частых (LEFT/OFFLINE не должны задавать имя класса).
+        Map<String, Integer> df = new HashMap<>();
+        for (Signals s0 : sigs.values()) {
+            for (String str : new HashSet<>(s0.strings)) df.merge(str, 1, Integer::sum);
+        }
+
+        // То же по токенам имён методов/полей: редкие слова информативнее частых.
+        Map<String, Integer> dfTokens = new HashMap<>();
+        for (Signals s0 : sigs.values()) {
+            Set<String> toks = new HashSet<>();
+            for (String m : s0.methods) toks.addAll(splitWords(m));
+            for (String f : s0.fields) toks.addAll(splitWords(f));
+            for (String t : toks) dfTokens.merge(t, 1, Integer::sum);
+        }
 
         List<String> names = new ArrayList<>(sigs.keySet());
         Collections.sort(names);
@@ -96,7 +120,7 @@ public final class ClassRenamer {
             }
             if (!shouldRename(internal)) continue;
             Signals s = sigs.get(internal);
-            Map<String, Integer> score = tokenScore(s);
+            Map<String, Integer> score = tokenScore(s, df, dfTokens);
             String pkg = themeOf(score, s);
             String base = simple(internal);
             int dpos = base.indexOf('$');
@@ -162,7 +186,7 @@ public final class ClassRenamer {
         boolean allStatic = true;
         boolean hasOnHandler;
 
-        static Signals of(ClassNode cn) {
+        static Signals of(ClassNode cn, StringDecryptor decryptor) {
             Signals s = new Signals();
             s.superName = cn.superName;
             s.interfaces = cn.interfaces != null ? new ArrayList<>(cn.interfaces) : List.of();
@@ -194,6 +218,13 @@ public final class ClassRenamer {
                             if (text.length() >= 4 && text.length() <= 40) ss.add(text);
                         }
                     }
+                }
+            }
+            if (decryptor != null) {
+                int n = decryptor.count(cn.name);
+                for (int i = 0; i < n && ss.size() < 80; i++) {
+                    String text = decryptor.decrypt(cn.name, i);
+                    if (text != null && text.length() >= 4 && text.length() <= 60) ss.add(text);
                 }
             }
             s.strings = ss;
@@ -272,17 +303,49 @@ public final class ClassRenamer {
                 || (digits >= 1 && upper >= 1 && lower >= 1 && vowelRatio < 0.3);
     }
 
-    private static Map<String, Integer> tokenScore(Signals s) {
+    private static Map<String, Integer> tokenScore(Signals s, Map<String, Integer> df,
+                                                  Map<String, Integer> dfTokens) {
         Map<String, Integer> score = new LinkedHashMap<>();
         for (String i : s.interfaces) tokens(score, simple(i), 3);
         if (s.superName != null && !s.superName.equals("java/lang/Object")) {
             tokens(score, simple(s.superName), 3);
         }
-        for (String m : s.methods) tokens(score, m, 2);
-        for (String f : s.fields) tokens(score, f, 1);
-        for (String str : s.strings) tokens(score, str, 1);
+        for (String m : s.methods) tokens(score, m, nameWeight(m, dfTokens, 2));
+        for (String f : s.fields) tokens(score, f, nameWeight(f, dfTokens, 1));
+        for (String str : s.strings) {
+            tokens(score, str, Math.min(stringWeight(str, df), STRING_MAX_WEIGHT));
+        }
         for (String ty : s.types) tokens(score, simple(ty), 2);
         return score;
+    }
+
+    /** Потолок веса строки: ниже супертипа/интерфейсов, чтобы темы не перетекали. */
+    private static final int STRING_MAX_WEIGHT = 2;
+
+    /**
+     * Вес имени метода/поля: редкие токены (малый jar-wide df) получают бонус,
+     * частые — базовый вес. Так «animate» важнее, чем «get»/«value».
+     */
+    private static int nameWeight(String src, Map<String, Integer> dfTokens, int base) {
+        if (dfTokens == null || src == null) return base;
+        int best = Integer.MAX_VALUE;
+        for (String w : splitWords(src)) {
+            String lw = w.toLowerCase();
+            if (w.length() < 3 || STOP.contains(lw)) continue;
+            best = Math.min(best, dfTokens.getOrDefault(w, 1));
+        }
+        if (best == Integer.MAX_VALUE) return base;
+        if (best <= 2) return base + 2;
+        if (best <= 5) return base + 1;
+        return base;
+    }
+
+    /** Вес строкового токена: редкая строка информативнее частой (jar-wide df). */
+    private static int stringWeight(String str, Map<String, Integer> df) {
+        int d = df == null ? 1 : df.getOrDefault(str, 1);
+        if (d <= 2) return 3;
+        if (d <= 5) return 2;
+        return 1;
     }
 
     /** Тема пакета по агрегату токенов. */

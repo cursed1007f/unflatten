@@ -80,6 +80,12 @@ public final class StringDecryptor {
         return data.keySet();
     }
 
+    /** Число блобов (строк) класса; 0 — класса нет в блобе. */
+    public int count(String className) {
+        byte[][] blobs = data.get(className);
+        return blobs == null ? 0 : blobs.length;
+    }
+
     /**
      * Расшифровывает строку класса по индексу.
      *

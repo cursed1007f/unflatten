@@ -121,7 +121,7 @@ public final class Main {
 
         // переименование обфусцированных классов в осмысленные имена (пункт 1)
         try {
-            decompiler.ast.ClassRenamer.build(jar);
+                decompiler.ast.ClassRenamer.build(jar, decryptor);
         } catch (Exception ex) {
             System.err.println("Предупреждение: переименование классов не удалось: " + ex);
         }
