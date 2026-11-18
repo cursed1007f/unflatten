@@ -474,3 +474,12 @@ lost block: 13 BB + 2 handler = 15 (s40) -> 16 BB + 2 handler = 18 (s41); +3 р�
 - **Итого: ~+282 survived**
 
 Источник: other-бакет (метки switch key prelude, loop header prelude, multi-block try range), подтверждено на CFR (s103) и slash-наборах.
+## Сессия s131 — switch key prelude: реализовано (+7 survived)
+
+**Сделано:** вместо bail `switch key prelude` операторы, выработанные при вычислении ключа switch, печатаются перед switch (через прозрачный `Ast.Block`). Значение ключа берётся как раньше.
+
+**Результат:** survived **1809 -> 1816** (+7), undecompilable **133 -> 126**, other 107 -> 100. Матрица s126->s130: 11 переходов — 8 в survived, 3 в lost block (`IAzR\\` BB4, `IYgzY\` BB4, `It\\` BB7).
+
+**Гейт:** bad 72 -> 73, real 38 -> 39 — единственный новый bad-класс `IaNl\` с `cant.access` (не структурная поломка, а доступ/тип в новом методе).
+
+**Осталось из бэклога:** loop header prelude (+15 CFR, +190 slashW), multi-block try range (+32 CFR).
