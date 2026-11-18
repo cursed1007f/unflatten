@@ -174,6 +174,11 @@ public final class JavaClassPrinter {
         // Хвостовой return; эквивалентен выходу из инициализатора и снят.
         // return в середине clinit (обфускация) снимать нельзя — это реальный
         // выход, после которого код не должен исполняться: честный отказ.
+        String cleaned = body.replaceAll("return;\\s*\\}", "}");
+        while (!cleaned.equals(body)) {
+            body = cleaned;
+            cleaned = body.replaceAll("return;\\s*\\}", "}");
+        }
         if (body.contains("return;")) {
             throw new UndecompilableException(
                     UndecompilableException.Kind.OTHER, "return inside <clinit>");
@@ -182,6 +187,31 @@ public final class JavaClassPrinter {
     }
 
     /** Убирает хвостовой return; из static-блока: в Java он невалиден. */
+    /** Убирает return; стоящие последними в блоке (эквивалент выхода из инициализатора). */
+    private static String stripTerminalReturns(String body) {
+        String[] lines = body.split("\n", -1);
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (int i = 0; i < lines.length; i++) {
+                if (!"        return;".equals(lines[i].replace("\r", "").trim().isEmpty() ? "" : lines[i].replace("\r", ""))) {
+                    if (!lines[i].replace("\r", "").trim().equals("return;")) continue;
+                }
+                int j = i + 1;
+                while (j < lines.length && lines[j].trim().isEmpty()) j++;
+                if (j < lines.length && lines[j].trim().startsWith("}")) {
+                    lines[i] = "";
+                    changed = true;
+                }
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String l : lines) {
+            if (l.isEmpty()) continue;
+            sb.append(l).append('\n');
+        }
+        return sb.toString();
+    }
     private static String stripTrailingReturn(String body) {
         String[] lines = body.split("\\n", -1);
         for (int i = lines.length - 1; i >= 0; i--) {
