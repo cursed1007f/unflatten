@@ -801,6 +801,20 @@ lost block: 13 BB + 2 handler = 15 (s40) -> 16 BB + 2 handler = 18 (s41); +3 р�
 3. Диагноз `void.not.allowed.here` (167): это симптом `ref.ambiguous` — пример `util/Target`: `if (!O00000000().O00000000(p0))`, javac выбирает void-перегрузку из-за неоднозначности. Отдельный фикс «не пушить void» не нужен.
 
 **План по вариантам — `IMPROVEMENTS.md`:** касты аргументов к типам параметров из `m.desc` (снятие `ref.ambiguous`/`cant.apply.symbols`) → типизация возвратов через `ClassHierarchy` (`cant.deref`) → массивы → метка preview в гейте.
+## Сессия s179 — касты аргументов к типам параметров
+
+**Сделано.** `castArgsToParams` в `BytecodeToExpr.doCall`: каждый ссылочный аргумент приводится к объявленному типу параметра из `m.desc` (`(Type) arg`), включая `null`. Это снимает неоднозначность перегрузок у обфусцированных методов с одинаковыми именами.
+
+**Гейт SpaceVisuals (s178 → s179).**
+- bad **264 → 260**, real **151 → 142**.
+- Коды: `ref.ambiguous` 133 → **71**, `void.not.allowed.here` 167 → **111**, `cant.apply.symbols` 211 → **177**, `prob.found.req` 686 → 672, `cant.deref` 188 → 179, `array.req` 47 → 40.
+- `is.preview` 100 → 118 (preview-классы доходят до компиляции чаще — не наш дефект).
+- survived 4514/5178 без изменений, class-level 0.
+
+**Контроль на slash-obf-legit:** гейт bad **60 → 58**, real 14 без изменений, survived 1816/1942, class-level 0. Тесты зелёные.
+
+**Следующий шаг:** типизация возвратов вызовов через `ClassHierarchy` (остаток `cant.deref` 179 и `cant.apply.symbols` 177), затем массивы.
+
 
 Тесты зелёные.
 
