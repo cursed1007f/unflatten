@@ -1082,6 +1082,9 @@ public final class BytecodeToExpr {
         }
 
         String retDesc = m.desc.substring(m.desc.indexOf(')') + 1);
+        // Каст аргументов к типам параметров: снимает неоднозначность перегрузок
+        // (ref.ambiguous) у обфусцированных методов с одинаковыми именами.
+        castArgsToParams(args, m.desc);
         Ast.Call call = new Ast.Call(target, m.name, args, m.getOpcode() == Opcodes.INVOKESTATIC, retDesc);
         // void-вызов — оператор, а не значение
         if (m.desc.endsWith(")V")) {
@@ -1101,6 +1104,45 @@ public final class BytecodeToExpr {
     private static Integer literalInt(Ast.Expr e) {
         if (e instanceof Ast.Literal l && l.value() instanceof Number n) return n.intValue();
         return null;
+    }
+
+    /** Приводит ссылочные аргументы к объявленным типам параметров. */
+    private static void castArgsToParams(List<Ast.Expr> args, String methodDesc) {
+        List<String> params = paramDescs(methodDesc);
+        for (int i = 0; i < args.size() && i < params.size(); i++) {
+            String pd = params.get(i);
+            if (!pd.startsWith("L") && !pd.startsWith("[")) continue;
+            Ast.Expr a = args.get(i);
+            String type = Ast.friendlyType(pd);
+            if (a instanceof Ast.Cast c && type.equals(c.type())) continue;
+            args.set(i, new Ast.Cast(type, a));
+        }
+    }
+
+    /** Дескрипторы параметров из дескриптора метода. */
+    private static List<String> paramDescs(String desc) {
+        List<String> out = new ArrayList<>();
+        int i = desc.indexOf('(') + 1;
+        while (i > 0 && i < desc.length() && desc.charAt(i) != ')') {
+            char c = desc.charAt(i);
+            int start = i;
+            if (c == '[') {
+                while (i < desc.length() && desc.charAt(i) == '[') i++;
+                if (i < desc.length() && desc.charAt(i) == 'L') {
+                    while (i < desc.length() && desc.charAt(i) != ';') i++;
+                }
+                i++;
+                out.add(desc.substring(start, Math.min(i, desc.length())));
+            } else if (c == 'L') {
+                while (i < desc.length() && desc.charAt(i) != ';') i++;
+                i++;
+                out.add(desc.substring(start, Math.min(i, desc.length())));
+            } else {
+                out.add(String.valueOf(c));
+                i++;
+            }
+        }
+        return out;
     }
 
     private int argsCount(String desc) {
