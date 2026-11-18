@@ -629,17 +629,17 @@ int n = out.length;
             all.computeIfAbsent(v.var, k -> new java.util.TreeMap<>()).put(i, t);
         }
         for (var e : all.entrySet()) {
-            boolean prim = false, arr = false;
+            boolean prim = false, ref = false;
             for (String t : e.getValue().values()) {
-                if (t.endsWith("[]")) arr = true;
+                if (t.endsWith("[]") || "ref".equals(t)) ref = true;
                 else if (java.util.Set.of("int", "long", "float", "double").contains(t)) prim = true;
             }
-            if (arr && prim) {
+            if (prim && ref) {
                 SLOT_CONFLICTS++;
                 SLOT_SEGMENTS.put(e.getKey(), e.getValue());
                 String at = null;
                 for (String t : e.getValue().values()) if (t.endsWith("[]")) at = t;
-                if (at != null) SPLIT_SLOTS.put(e.getKey(), at);
+                SPLIT_SLOTS.put(e.getKey(), at != null ? at : "Object");
             }
         }
     }

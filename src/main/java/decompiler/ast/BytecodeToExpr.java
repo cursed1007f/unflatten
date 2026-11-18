@@ -1085,6 +1085,12 @@ public final class BytecodeToExpr {
         // Каст аргументов к типам параметров: снимает неоднозначность перегрузок
         // (ref.ambiguous) у обфусцированных методов с одинаковыми именами.
         castArgsToParams(args, m.desc);
+        // Приёмник — переменная неизвестного/переиспользованного слота: приводим
+        // к владельцу метода, иначе javac не находит метод (cant.deref).
+        if (target instanceof Ast.Var tv && !"this".equals(tv.name())) {
+            String ownerType = Ast.friendlyType("L" + m.owner + ";");
+            target = new Ast.Cast(ownerType, tv);
+        }
         Ast.Call call = new Ast.Call(target, m.name, args, m.getOpcode() == Opcodes.INVOKESTATIC, retDesc);
         // void-вызов — оператор, а не значение
         if (m.desc.endsWith(")V")) {

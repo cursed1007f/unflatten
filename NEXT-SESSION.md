@@ -814,6 +814,28 @@ lost block: 13 BB + 2 handler = 15 (s40) -> 16 BB + 2 handler = 18 (s41); +3 р�
 **Контроль на slash-obf-legit:** гейт bad **60 → 58**, real 14 без изменений, survived 1816/1942, class-level 0. Тесты зелёные.
 
 **Следующий шаг:** типизация возвратов вызовов через `ClassHierarchy` (остаток `cant.deref` 179 и `cant.apply.symbols` 177), затем массивы.
+## Сессия s180 — slot versioning «ссылка/примитив» и каст приёмника
+
+**Диагноз.** `cant.deref` — не про типы возвратов: в `net/Spacevisuals61` параметр `int p2`
+переиспользуется под объект, и печатается `p2.comp_4801()`. Одно имя на слот при смене
+вида даёт «int cannot be dereferenced».
+
+**Сделано.**
+1. `TypeInference.collectSlotSegments`: конфликт теперь «примитив + любая ссылка» (было
+   только «массив + примитив»); для не-массивной ссылки версия объявляется как `Object`.
+2. `BytecodeToExpr.doCall`: приёмник-переменная (кроме `this`) приводится к владельцу
+   метода — `((Owner) x).m()`, чтобы javac находил метод у переиспользованного слота.
+
+**Гейт SpaceVisuals (s179 → s180).**
+- bad **260 → 257**, real **142 → 128**.
+- `cant.deref` 179 → **31**, `array.req` 40 → 29, `prob.found.req` 672 → **586**,
+  `void.not.allowed` 111 → 75, `operator.cant.be.applied.1` 25 → 12,
+  `ref.ambiguous` 71 → 68, `name.clash` 32 → 29.
+- survived 4514/5178 без изменений, class-level 0.
+
+**Контроль slash-obf-legit:** bad **58 → 56**, real **14 → 7**, survived 1816/1942,
+class-level 0. Тесты зелёные.
+
 
 
 Тесты зелёные.
