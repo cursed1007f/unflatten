@@ -121,7 +121,8 @@ public final class ClassRenamer {
             if (!shouldRename(internal)) continue;
             Signals s = sigs.get(internal);
             Map<String, Integer> score = tokenScore(s, df, dfTokens);
-            String pkg = themeOf(score, s);
+            Map<String, Integer> themeScore = tokenScoreNoStrings(s, dfTokens);
+            String pkg = themeFromTokens(themeScore, s);
             String base = simple(internal);
             int dpos = base.indexOf('$');
             if (dpos > 0) base = base.substring(0, dpos);
@@ -133,6 +134,7 @@ public final class ClassRenamer {
             String name = unique(sanitize(pascal(tok) + suffix(s)), used);
             RENAMED.put(internal, pkg + "/" + name);
         }
+
         // Вложенные: если внешний переименован — тот же пакет, ИмяВнешнего$Внутренний
         for (String internal : names) {
             if (!internal.contains("$")) continue;
@@ -319,6 +321,23 @@ public final class ClassRenamer {
         return score;
     }
 
+    /**
+     * Тема пакета без строковых сигналов: строки массово содержат ui-слова
+     * (panel/view/render/text) и перевешивают реальную роль класса.
+     */
+    private static Map<String, Integer> tokenScoreNoStrings(Signals s,
+                                                           Map<String, Integer> dfTokens) {
+        Map<String, Integer> score = new LinkedHashMap<>();
+        for (String i : s.interfaces) tokens(score, simple(i), 3);
+        if (s.superName != null && !s.superName.equals("java/lang/Object")) {
+            tokens(score, simple(s.superName), 3);
+        }
+        for (String m : s.methods) tokens(score, m, nameWeight(m, dfTokens, 2));
+        for (String f : s.fields) tokens(score, f, nameWeight(f, dfTokens, 1));
+        for (String ty : s.types) tokens(score, simple(ty), 2);
+        return score;
+    }
+
     /** Потолок веса строки: ниже супертипа/интерфейсов, чтобы темы не перетекали. */
     private static final int STRING_MAX_WEIGHT = 2;
 
@@ -349,7 +368,7 @@ public final class ClassRenamer {
     }
 
     /** Тема пакета по агрегату токенов. */
-    private static String themeOf(Map<String, Integer> score, Signals s) {
+    private static String themeFromTokens(Map<String, Integer> score, Signals s) {
         if (s != null) {
             Map<String, Integer> extra = new LinkedHashMap<>();
             for (String ty : s.types) themeVote(extra, ty, 3);
