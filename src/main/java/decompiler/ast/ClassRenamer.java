@@ -90,24 +90,31 @@ public final class ClassRenamer {
         Set<String> used = new HashSet<>();
         // Внешние классы
         for (String internal : names) {
-            if (internal.contains("$")) continue;
+            if (internal.contains("$")) {
+                String outer = internal.substring(0, internal.indexOf('$'));
+                if (sigs.containsKey(outer)) continue; // настоящий вложенный — во втором проходе
+            }
             if (!shouldRename(internal)) continue;
             Signals s = sigs.get(internal);
             Map<String, Integer> score = tokenScore(s);
             String pkg = themeOf(score);
-            String name = unique(pascal(best(score)) + suffix(s), used);
+            String base = simple(internal);
+            int dpos = base.indexOf('$');
+            if (dpos > 0) base = base.substring(0, dpos);
+            String name = unique(sanitize(pascal(best(score)) + suffix(s)), used);
             RENAMED.put(internal, pkg + "/" + name);
         }
         // Вложенные: если внешний переименован — тот же пакет, ИмяВнешнего$Внутренний
         for (String internal : names) {
             if (!internal.contains("$")) continue;
+            if (RENAMED.containsKey(internal)) continue;
             int d = internal.indexOf('$');
             String outer = internal.substring(0, d);
             String outerNew = RENAMED.get(outer);
             if (outerNew == null) continue;
             String pkg = outerNew.substring(0, outerNew.lastIndexOf('/'));
             String outerName = outerNew.substring(outerNew.lastIndexOf('/') + 1);
-            String inner = innerName(internal.substring(d + 1), sigs.get(internal), used, outerName);
+            String inner = sanitize(innerName(internal.substring(d + 1), sigs.get(internal), used, outerName));
             RENAMED.put(internal, pkg + "/" + inner);
         }
     }
@@ -137,6 +144,7 @@ public final class ClassRenamer {
         List<String> interfaces = List.of();
         List<String> methods = List.of();
         List<String> fields = List.of();
+        List<String> strings = List.of();
         boolean allStatic = true;
         boolean hasOnHandler;
 
@@ -158,6 +166,20 @@ public final class ClassRenamer {
             List<String> fs = new ArrayList<>();
             if (cn.fields != null) for (FieldNode f : cn.fields) fs.add(f.name);
             s.fields = fs;
+            List<String> ss = new ArrayList<>();
+            if (cn.methods != null) {
+                for (MethodNode m : cn.methods) {
+                    if (m.instructions == null) continue;
+                    for (var it = m.instructions.iterator(); it.hasNext() && ss.size() < 40; ) {
+                        var insn = it.next();
+                        if (insn instanceof org.objectweb.asm.tree.LdcInsnNode ldc
+                                && ldc.cst instanceof String str && str.length() >= 4 && str.length() <= 24) {
+                            ss.add(str);
+                        }
+                    }
+                }
+            }
+            s.strings = ss;
             return s;
         }
     }
@@ -191,7 +213,20 @@ public final class ClassRenamer {
         for (int i = 1; i < s.length(); i++) {
             if (!Character.isJavaIdentifierPart(s.charAt(i))) return true;
         }
-        if (s.length() < 5) return false;
+        String core = s;
+        int dollar = core.indexOf('$');
+        if (dollar > 0) core = core.substring(0, dollar);
+        if (core.length() < 5) return false;
+        int transitions = 0;
+        for (int i = 1; i < core.length(); i++) {
+            char a = core.charAt(i - 1), b = core.charAt(i);
+            if (Character.isLowerCase(a) && Character.isUpperCase(b)) transitions++;
+        }
+        int uppers = 0;
+        for (int i = 1; i < core.length(); i++) if (Character.isUpperCase(core.charAt(i))) uppers++;
+        if (core.length() >= 8 && uppers >= 2) return true;
+        if (core.length() >= 6 && transitions >= 3) return true;
+        if (core.length() >= 8 && transitions >= 2 && core.indexOf('a') < 0 && core.indexOf('e') < 0) return true;
         // «спам» из похожих символов I/l/1/O/0 (IllIlIIIIIIlII) — типичный обфускатор
         int confusable = 0;
         for (int i = 0; i < s.length(); i++) {
@@ -220,6 +255,7 @@ public final class ClassRenamer {
         }
         for (String m : s.methods) tokens(score, m, 2);
         for (String f : s.fields) tokens(score, f, 1);
+        for (String str : s.strings) tokens(score, str, 1);
         return score;
     }
 
@@ -248,7 +284,31 @@ public final class ClassRenamer {
         return null;
     }
 
+    /** Оставляет только символы, допустимые в Java-идентификаторе. */
+    private static String sanitize(String s) {
+        if (s == null) return "Cls";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (Character.isLetterOrDigit(c) || c == '_') sb.append(c);
+        }
+        if (sb.length() == 0) return "Cls";
+        if (!Character.isJavaIdentifierStart(sb.charAt(0))) sb.insert(0, 'C');
+        String r = sb.toString();
+        if (KEYWORDS.contains(r)) r = r + "Cls";
+        return r;
+    }
+
+    private static final Set<String> KEYWORDS = Set.of(
+            "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class",
+            "const", "continue", "default", "do", "double", "else", "enum", "extends", "final",
+            "finally", "float", "for", "goto", "if", "implements", "import", "instanceof", "int",
+            "interface", "long", "native", "new", "package", "private", "protected", "public",
+            "return", "short", "static", "strictfp", "super", "switch", "synchronized", "this",
+            "throw", "throws", "transient", "try", "void", "volatile", "while", "true", "false", "null");
     private static String suffix(Signals s) {
+        String bySuper = supertypeSuffix(s);
+        if (bySuper != null) return bySuper;
         if (implementsAny(s, "java/lang/Runnable", "java/util/concurrent/Callable",
                 "java/lang/Thread")) return "Task";
         if (s.hasOnHandler) return "Handler";
@@ -257,6 +317,20 @@ public final class ClassRenamer {
         return "";
     }
 
+    /** Суффикс по суперклассу/интерфейсу (Screen, Listener, Command, Exception...). */
+    private static String supertypeSuffix(Signals s) {
+        String[] known = {"Screen", "Panel", "Widget", "Listener", "Handler", "Command",
+                "Event", "Mixin", "Module", "Manager", "Provider", "Factory", "Exception", "Error"};
+        List<String> supers = new ArrayList<>();
+        if (s.superName != null) supers.add(simple(s.superName));
+        for (String i : s.interfaces) supers.add(simple(i));
+        for (String sup : supers) {
+            for (String k : known) {
+                if (sup.endsWith(k) && sup.length() > k.length()) return k;
+            }
+        }
+        return null;
+    }
     private static boolean implementsAny(Signals s, String... names) {
         for (String n : names) {
             if (s.interfaces.contains(n)) return true;
@@ -340,6 +414,7 @@ public final class ClassRenamer {
             Map<String, Integer> score = new LinkedHashMap<>();
             for (String m : s.methods) tokens(score, m, 2);
             for (String f : s.fields) tokens(score, f, 1);
+        for (String str : s.strings) tokens(score, str, 1);
             candidate = best(score);
         }
         String base = (candidate != null ? pascal(candidate) : "Inner");
