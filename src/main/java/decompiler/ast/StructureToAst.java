@@ -1014,10 +1014,10 @@ public final class StructureToAst {
                 int header = node.loopHeader();
                 java.util.Set<Integer> bodyIdx = new java.util.HashSet<>(node.loopBody());
                 Ast.Expr cond = loopCond(header, bodyIdx);
-                if (!lastCondStatements.isEmpty()) {
-                    throw new UndecompilableException(
-                            UndecompilableException.Kind.OTHER, "loop header prelude");
-                }
+                java.util.List<Ast.Stmt> loopPrelude = new ArrayList<>(lastCondStatements);
+
+
+
                 normalEmits.merge(header, 1, Integer::sum);
                 java.util.Map<Integer, Integer> nBefore = new java.util.HashMap<>(normalEmits);
                 java.util.Map<Integer, Integer> cBefore = new java.util.HashMap<>(catchEmits);
@@ -1034,7 +1034,7 @@ public final class StructureToAst {
                 if (cv instanceof Boolean b) {
                     CONST_FOLDED.incrementAndGet();
                     if (b) {
-                        out.add(new Ast.While(sourced(new Ast.Literal(true)), body));
+                        addWithPrelude(out, loopPrelude, new Ast.While(sourced(new Ast.Literal(true)), body));
                     } else {
                         // while(false): тело мёртвое — откатываем его счётчики
                         // и съеденные handler'ы/switch-блоки.
@@ -1044,7 +1044,7 @@ public final class StructureToAst {
                         restoreSet(switchConsumed, sBefore);
                     }
                 } else {
-                    out.add(new Ast.While(cond, body));
+                    addWithPrelude(out, loopPrelude, new Ast.While(cond, body));
                 }
             }
             case IF_ELSE -> {
@@ -1470,6 +1470,16 @@ public final class StructureToAst {
     }
 
     /** РЈСЃР»РѕРІРёРµ Р±Р»РѕРєР° (РґРѕ СѓСЃР»РѕРІРЅРѕРіРѕ РїРµСЂРµС…РѕРґР°). */
+    /** Печатает prelude перед оператором цикла (прозрачный блок не добавляет скобок). */
+    private static void addWithPrelude(List<Ast.Stmt> out, List<Ast.Stmt> prelude, Ast.Stmt stmt) {
+        if (prelude == null || prelude.isEmpty()) {
+            out.add(stmt);
+            return;
+        }
+        List<Ast.Stmt> all = new ArrayList<>(prelude);
+        all.add(stmt);
+        out.add(new Ast.Block(all));
+    }
     /** Операторы prelude из последнего condFrom (для проверки потерь). */
     private List<Ast.Stmt> lastCondStatements = List.of();
 
