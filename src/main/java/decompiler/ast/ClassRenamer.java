@@ -97,7 +97,7 @@ public final class ClassRenamer {
             if (!shouldRename(internal)) continue;
             Signals s = sigs.get(internal);
             Map<String, Integer> score = tokenScore(s);
-            String pkg = themeOf(score);
+            String pkg = themeOf(score, s);
             String base = simple(internal);
             int dpos = base.indexOf('$');
             if (dpos > 0) base = base.substring(0, dpos);
@@ -122,6 +122,14 @@ public final class ClassRenamer {
             String inner = sanitize(innerName(internal.substring(d + 1), sigs.get(internal), used, outerName));
             RENAMED.put(internal, pkg + "/" + inner);
         }
+    }
+
+    /** Пакет переименованного класса (или null). */
+    public static String packageOf(String internal) {
+        String r = RENAMED.get(internal);
+        if (r == null) return null;
+        int slash = r.lastIndexOf('/');
+        return slash > 0 ? r.substring(0, slash) : null;
     }
 
     /** Переименован ли класс. */
@@ -275,7 +283,14 @@ public final class ClassRenamer {
     }
 
     /** Тема пакета по агрегату токенов. */
-    private static String themeOf(Map<String, Integer> score) {
+    private static String themeOf(Map<String, Integer> score, Signals s) {
+        if (s != null) {
+            Map<String, Integer> extra = new LinkedHashMap<>();
+            for (String ty : s.types) themeVote(extra, ty, 3);
+            if (s.superName != null) themeVote(extra, s.superName, 3);
+            for (String i2 : s.interfaces) themeVote(extra, i2, 3);
+            for (var e2 : extra.entrySet()) score.merge(e2.getKey(), e2.getValue(), Integer::sum);
+        }
         Map<String, Integer> themes = new LinkedHashMap<>();
         for (var e : score.entrySet()) {
             String th = themeOfWord(e.getKey());
@@ -289,6 +304,22 @@ public final class ClassRenamer {
         return bestTheme;
     }
 
+    /** Голос темы по полному имени типа (пакеты Minecraft и т.п.). */
+    private static void themeVote(Map<String, Integer> themes, String internal, int weight) {
+        String low = internal.toLowerCase();
+        String th = null;
+        if (low.contains("gui") || low.contains("screen") || low.contains("render")
+                || low.contains("hud") || low.contains("client/gl") || low.contains("font")
+                || low.contains("draw")) th = "ui";
+        else if (low.contains("entity") || low.contains("world") || low.contains("block")
+                || low.contains("level") || low.contains("player") || low.contains("chunk")) th = "world";
+        else if (low.contains("sound") || low.contains("audio") || low.contains("music")) th = "audio";
+        else if (low.contains("network") || low.contains("packet") || low.contains("socket")) th = "net";
+        else if (low.contains("math") || low.contains("jemalloc") || low.contains("joml")) th = "math";
+        else if (low.contains("util") || low.contains("common")) th = "util";
+        else th = themeOfWord(simple(internal));
+        if (th != null) themes.merge(th, weight, Integer::sum);
+    }
     private static String themeOfWord(String w) {
         String lw = w.toLowerCase();
         for (String[] t : THEMES) {

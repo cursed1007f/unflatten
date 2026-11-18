@@ -46,6 +46,8 @@ public final class JavaClassPrinter {
     public static String printClass(ClassNode cn, StringDecryptor decryptor, ClassHierarchy hierarchy) {
         StringBuilder sb = new StringBuilder();
         // заголовок
+        String pkg = ClassRenamer.packageOf(cn.name);
+        if (pkg != null) sb.append("package ").append(pkg.replace('/', '.')).append(";\n\n");
         sb.append(classDeclaration(cn)).append(" {\n\n");
         // enum: JLS 8.9 — сначала список констант, затем ';' перед членами тела
         if ((cn.access & Opcodes.ACC_ENUM) != 0) {
