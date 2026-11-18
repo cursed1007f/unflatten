@@ -179,6 +179,41 @@ public final class QualityChecker {
     // new Object( - пустой конструктор-заглушка
     /** "Мёртвое" присваивание: имя переменной больше нигде в классе не встречается. */
     static int DEBUG_DEAD;
+    /** return 0; считается дефектом только там, где метод возвращает не int. */
+    static int RZ_DEBUG;
+    private static int countReturnZero(String java) {
+        Pattern rz = Pattern.compile("\\breturn 0;");
+        var m = rz.matcher(java);
+        int bad = 0;
+        while (m.find()) {
+            String head = enclosingSignature(java, m.start());
+            if (head == null || head.contains(" int ")) continue; // законный возврат int
+            bad++;
+        }
+        return bad;
+    }
+
+    private static boolean isControlLine(String t) {
+        return t.startsWith("if ") || t.startsWith("if(") || t.startsWith("else")
+                || t.startsWith("while ") || t.startsWith("while(") || t.startsWith("for ")
+                || t.startsWith("for(") || t.startsWith("try") || t.startsWith("catch")
+                || t.startsWith("switch") || t.startsWith("synchronized") || t.startsWith("do ");
+    }
+    private static String enclosingSignature(String java, int pos) {
+        for (int i = pos; i > 0; ) {
+            i = java.lastIndexOf('\n', i - 1);
+            if (i < 0) break;
+            int end = java.indexOf('\n', i + 1);
+            String line = java.substring(i + 1, end < 0 ? java.length() : end);
+            String t = line.trim();
+            if (t.endsWith("{") && t.contains("(") && !isControlLine(t)) {
+                int paren = t.indexOf('(');
+                int sp = t.lastIndexOf(' ', paren);
+                return sp > 0 ? t.substring(0, sp) + " " + t.substring(sp + 1) : t;
+            }
+        }
+        return null;
+    }
     private static int countDeadIvarConst(String java) {
         Pattern p2 = Pattern.compile("\\b([ilfdo]Var\\d+)\\s*=\\s*-?\\d+(?:\\.\\d*)?[LlFfDd]?;");
         var m = p2.matcher(java);
@@ -242,7 +277,7 @@ public final class QualityChecker {
         r.castObject = count(CAST_OBJECT, java);
         r.newObject = count(NEW_OBJECT, java);
         r.deadIVarConst = countDeadIvarConst(java);
-        r.returnZero = count(RETURN_ZERO, java);
+        r.returnZero = countReturnZero(java);
         r.undecompilable = countAll("// undecompilable:", java);
         // Независимый учёт по точной метке причины: other — это только
         // нераспознанные метки, а не «total минус известные». Иначе guard
