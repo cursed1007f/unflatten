@@ -62,6 +62,7 @@ public final class Main {
         boolean astMode = false;
         boolean detectMode = false;
         boolean gateMode = false;
+        boolean noRename = false;
         String exportDir = null;
         Path keyPath = null;
         for (int i = 1; i < args.length; i++) {
@@ -72,6 +73,7 @@ public final class Main {
             if (args[i].equals("--ast")) astMode = true;
             if (args[i].equals("--detect")) detectMode = true;
             if (args[i].equals("--gate")) gateMode = true;
+            if (args[i].equals("--no-rename")) noRename = true;
             if (args[i].equals("--export") && i + 1 < args.length) {
                 exportDir = args[i + 1];
                 i++;
@@ -121,7 +123,7 @@ public final class Main {
 
         // переименование обфусцированных классов в осмысленные имена (пункт 1)
         try {
-                decompiler.ast.ClassRenamer.build(jar, decryptor);
+            if (!noRename) decompiler.ast.ClassRenamer.build(jar, decryptor);
         } catch (Exception ex) {
             System.err.println("Предупреждение: переименование классов не удалось: " + ex);
         }
