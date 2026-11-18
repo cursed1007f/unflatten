@@ -661,7 +661,7 @@ public final class StructureToAst {
                 }
             }
             target.addAll(at, decls);
-            normalizeBooleanLiterals(res);
+            normalizeBooleanLiterals(res, isBooleanReturn(method.desc));
             normalizeArrayTemps(res);
             fixDeclTypes(res);
         }
@@ -669,13 +669,24 @@ public final class StructureToAst {
     }
 
     /** boolean-локалы и phi-темпы: тип из присваиваний, литералы 0/1 -> false/true. */
-    private static void normalizeBooleanLiterals(java.util.List<Ast.Stmt> res) {
+    private static void normalizeBooleanLiterals(java.util.List<Ast.Stmt> res, boolean boolReturn) {
         java.util.Map<String, String> decl = new java.util.HashMap<>();
         walkStmts(res, l -> {
             for (Ast.Stmt s : l) if (s instanceof Ast.VarDecl d) decl.put(d.name(), d.type());
         });
         java.util.Set<String> bools = new java.util.HashSet<>();
         for (var e : decl.entrySet()) if ("boolean".equals(e.getValue())) bools.add(e.getKey());
+        // boolean-возвратный метод: переменные из return Z-контекста — кандидаты boolean.
+        if (boolReturn) {
+            walkStmts(res, l -> {
+                for (Ast.Stmt s : l) {
+                    if (s instanceof Ast.Return r && r.value() instanceof Ast.Var v
+                            && "int".equals(decl.get(v.name()))) {
+                        bools.add(v.name());
+                    }
+                }
+            });
+        }
         for (int round = 0; round < 3; round++) {
             java.util.List<String> promote = new java.util.ArrayList<>();
             walkStmts(res, l -> {

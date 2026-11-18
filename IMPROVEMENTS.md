@@ -96,5 +96,25 @@ bad 60 → 58; (2) типизация возвратов через `ClassHierar
 bad 260 → **257**, real 142 → **128**, `cant.deref` 179 → **31**, `array.req` 40 → 29,
 `prob.found.req` 672 → 586; slash-obf: bad 58 → **56**, real 14 → **7**. Регрессий нет.
 
+## Диагностика s181: пересмотр варианта 1 (типизация возвратов)
+
+**Проверено (гейт SpaceVisuals с текстами ошибок javac):** из 134 сэмплов `prob.found.req`
+**72 — «incompatible types: int cannot be converted to boolean»**. Тип возврата вызова уже
+берётся из `m.desc` (BytecodeToExpr:1084), поэтому «искать метод по owner+desc, брать тип
+возврата» почти ничего не даст. Настоящая дыра — **потеря признака Z** по пути
+«invoke → phi-темп → return/условие» (пример `mod/Spacevisuals21.active()`: boolean-метод,
+но `t4_0` объявлен `int`). Остаток (86) — `Object cannot be converted to T` (инвок
+возвращает объект, локал/темп остаётся `Object`).
+
+**Результат s181 (Z-перенос):** `normalizeBooleanLiterals(res, boolReturn)` — переменная
+из `Ast.Return` в boolean-методе сеет цепочку boolean-темпов (3-раундовый promotion,
+литералы 0/1 → false/true). SpaceVisuals: bad 257 → **222**, real 128 → **129**
+(переклассификация), `prob.found.req` 323 → **86**, survived 4514 без изменений;
+slash-obf: bad 56 → **38**, real 7 без изменений. Регрессий нет.
+
+**Дальше по остатку `prob.found.req` (86):** `Object cannot be converted to T` — типизация
+локалов/темпов на объектные типы из возврата вызова (как для массива в normalizeArrayTemps,
+но для Object → объявленный тип). Это следующий шаг, не Z.
+
 
 

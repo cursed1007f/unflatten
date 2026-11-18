@@ -836,6 +836,35 @@ lost block: 13 BB + 2 handler = 15 (s40) -> 16 BB + 2 handler = 18 (s41); +3 р�
 **Контроль slash-obf-legit:** bad **58 → 56**, real **14 → 7**, survived 1816/1942,
 class-level 0. Тесты зелёные.
 
+## Сессия s181 — Z-перенос: тип возврата Ast.Call в boolean-локалы/темпы
+
+**Диагноз.** Первый замер гейта на SpaceVisuals с текстами ошибок (добавлен `d.getMessage` в
+JavacGate-сэмплы) показал: из 134 сэмплов `prob.found.req` **72 — «incompatible types:
+int cannot be converted to boolean»**. Причина: тип возврата уже берётся из `m.desc`
+(BytecodeToExpr:1084), но по пути «invoke → phi-темп → return/условие» признак Z теряется.
+`mod/Spacevisuals21.active()`: `if (O000000000()==null) t4_0=0; return t4_0;` — метод
+`boolean`, но `t4_0` объявлялся `int` (тип из StackValue), и `return t4_0` давал ошибку.
+Вариант 1 плана («искать метод по owner+desc») здесь не нужен — desc тип возврата уже несёт.
+
+**Сделано.** `StructureToAst.normalizeBooleanLiterals(res, boolReturn)`: если метод возвращает
+`boolean`, переменная из `Ast.Return` (seed) помечается boolean и через 3-раундовый promotion
+затягивает цепочку темпов (`t4_0 = 0/1` → объявляется `boolean`, литералы `false`/`true`).
+
+**Гейт SpaceVisuals (bad 257 → 222, real 128 → 129).**
+- `prob.found.req` 323 → **86** (по per-class кодам), `int→boolean`-сэмплы ушли из большинства.
+- bad-классов: 257 → 222, ушло 35 (Spacevisuals21, Clinit2, Clinit4, Theme, Smooth, Stone и др.),
+  новых 0. `real` 128 → 129 (переклассификация: класс перестал маскироваться каскадом cant.resolve).
+- survived 4514/5178 / undecompilable 664 / class-level 0 — без изменений.
+
+**Контроль slash-obf-legit:** bad **56 → 38**, real **7 → 7** (без изменений), survived
+1816/1942, class-level 0. Регрессии нет — улучшение на обоих наборах.
+
+**Тесты:** 20 зелёных (16 + StringDecryptor 2 + ещё), 1 skipped — nested try.
+
+**Остаток `prob.found.req` (86):** теперь это в основном `Object cannot be converted to T`
+(инвок возвращает объект, локал/темп остаётся `Object`) — отдельная проблема типизации темпов
+на объектные типы, не Z. Записано в IMPROVEMENTS.md.
+
 
 
 Тесты зелёные.

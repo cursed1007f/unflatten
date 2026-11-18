@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.Locale;
 
 /**
  * Компилятор-гейт: собирает напечатанный Java-код класса in-process javac.
@@ -64,7 +65,8 @@ public final class JavacGate {
             }
             if (code.contains("underscore")) continue;
             codes.add(code);
-            if (samples.size() < 12) samples.add(code + ":" + d.getLineNumber());
+            if (samples.size() < 12)
+                samples.add(code + ":" + d.getLineNumber() + ":" + d.getMessage(Locale.ROOT));
         }
         List<String> realCodes = new ArrayList<>();
         for (String c : codes) {

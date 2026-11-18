@@ -1,15 +1,15 @@
 # STATUS — текущее состояние декомпилятора
 
-Сводка на конец сессии 180 (s167 try-регион откачен; s168 — декодер RT.dStr; s170–s172 — NativeKeyExtractor и ключ в DLL; s173–s175 — словарь/IDF/темы; s176 — граф B отклонён; s178 — флаг --no-rename; s179 — касты аргументов; s180 — slot versioning «ссылка/примитив»). Историю по сессиям см. в `NEXT-SESSION.md`, варианты улучшения — в `IMPROVEMENTS.md`.
+Сводка на конец сессии 181 (s167 try-регион откачен; s168 — декодер RT.dStr; s170–s172 — NativeKeyExtractor и ключ в DLL; s173–s175 — словарь/IDF/темы; s176 — граф B отклонён; s178 — флаг --no-rename; s179 — касты аргументов; s180 — slot versioning «ссылка/примитив»; s181 — Z-перенос в boolean-локалы/темпы). Историю по сессиям см. в `NEXT-SESSION.md`, варианты улучшения — в `IMPROVEMENTS.md`.
 
 ## Метрики (замер на текущем HEAD)
 
 | Набор | Методов | survived | undecompilable | Балл (ниже=лучше) | БАЛЛ 0-100 | Гейт bad / real |
 |---|---|---|---|---|---|---|
-| slash-obf-legit / bytecode / renamed | 1942 | **1816** | 126 | 2 | **91** | 60 / 14 |
+| slash-obf-legit / bytecode / renamed | 1942 | **1816** | 126 | 2 | **91** | 38 / 7 |
 | cfr-0.152 | 8039 | 7616 | 423 | 0 | 85 | — |
 | slashW | 5833 | **4255** | 1578 | 786 | — | — |
-| SpaceVisuals | 5178 | 4509 | 669 | 1245 | — | 233 / 122 |
+| SpaceVisuals | 5178 | **4514** | 664 | 10 | 85 | 222 / 129 |
 
 Три jar'а `slash-obf-*` дают идентичные метрики. `class-level errors` = 0 на slash-наборах и CFR.
 
@@ -30,6 +30,7 @@
 - **SpaceVisuals и `--no-rename`** (s178): survived 4514/664, гейт bad 264 / real 151 (baseline s104: 233/122). A/B: без ренеймера — bad 314 / real 256, т.е. переименование полезно; `void.not.allowed.here` (167) — следствие `ref.ambiguous`, а не отдельный дефект. Приоритеты улучшений — `IMPROVEMENTS.md`.
 - **Касты аргументов** (s179): ссылочные аргументы приводятся к типу параметра из `m.desc`. SpaceVisuals: bad 264 → **260**, real 151 → **142**, `ref.ambiguous` 133 → 71, `void.not.allowed` 167 → 111, `cant.apply.symbols` 211 → 177; slash-obf: bad 60 → **58**, real 14, survived 1816 без изменений.
 - **Slot versioning «ссылка/примитив»** (s180): конфликт слотов расширен с «массив+примитив» до «примитив+любая ссылка» (версия `_a`, тип `Object`), приёмник-переменная кастуется к владельцу метода. SpaceVisuals: bad 260 → **257**, real 142 → **128**, `cant.deref` 179 → **31**, `array.req` 40 → 29, `prob.found.req` 672 → 586; slash-obf: bad 58 → **56**, real 14 → **7**, survived 1816.
+- **Z-перенос в boolean-локалы/темпы** (s181): тип возврата `Ast.Call` с `)Z`-дескриптором доводится до boolean-объявления (seed из `Ast.Return` в boolean-методах → 3-раундовый promotion темпов, литералы 0/1 → false/true). Диагноз: 72/134 остатка `prob.found.req` были «int cannot be converted to boolean». SpaceVisuals: bad 257 → **222**, real 128 → **129** (переклассификация), `prob.found.req` 323 → **86**, survived 4514 без изменений; slash-obf: bad 56 → **38**, real 7 без изменений.
 - **Чекер качества** (AGENTS п.4): маркеры `/* ? */`, `.<init>`, `UnsupportedOperationException`, пустые тела; балл 0-100; вывод `worst:` — топ-12 классов.
 - **`return;` в `<clinit>`** — снимается, если стоит перед `}` (slashW: class-level 1 → 0).
 - **ASM 9.11** — поддержка классов major 72 (SpaceVisuals).
