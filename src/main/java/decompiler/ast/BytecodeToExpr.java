@@ -268,6 +268,22 @@ public final class BytecodeToExpr {
      * загрузка ({@code *LOAD}) из слота 0 не может быть {@code this} — это
      * всегда спилл-значение, значит имя надо брать по опкоду загрузки.</p>
      */
+    /** Имя массивной версии слота при переиспользовании (slot splitting). */
+    private String arrayVariant(int slot) {
+        String base = name(slot);
+        if (!TypeInference.SPLIT_SLOTS.containsKey(slot)) return base;
+        String nm = base + "_a";
+        String type = TypeInference.SPLIT_SLOTS.get(slot);
+        boolean declared = false;
+        for (Ast.VarDecl d : ARRAY_DECLS) {
+            if (d.name().equals(nm)) {
+                declared = true;
+                break;
+            }
+        }
+        if (!declared) ARRAY_DECLS.add(new Ast.VarDecl(type, nm));
+        return nm;
+    }
     private String nameForLoad(int slot, int loadOpcode) {
         if (slot == 0 && "this".equals(name(0))) {
             // instance-метод: слот 0 статически называется «this», но сейчас его
@@ -362,7 +378,7 @@ public final class BytecodeToExpr {
                     nm = s0 != null ? s0 : name(var);
                 } else {
                     nm = (n.getOpcode() == Opcodes.ALOAD)
-                            ? name(var)
+                            ? arrayVariant(var)
                             : nameForLoad(var, n.getOpcode());
                 }
                 Ast.Var lv = new Ast.Var(nm);
@@ -384,7 +400,7 @@ public final class BytecodeToExpr {
                 }
                 pendingNew.remove(name(var));
                 pendingSlots.remove(name(var));
-                Ast.Var tgt = new Ast.Var(name(var));
+                Ast.Var tgt = new Ast.Var(n.getOpcode() == Opcodes.ASTORE ? arrayVariant(var) : name(var));
                 boolean isBool = n.getOpcode() == Opcodes.ISTORE && isBooleanSlot(var);
                 stmts.add(new Ast.Assign(tgt, boolLit(v, isBool)));
             }

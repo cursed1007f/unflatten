@@ -113,6 +113,8 @@ public final class TypeInference {
         // переиспользование слота 0 под int). Здесь примитивная классификация
         // преобладает, чтобы слот 0, куда писали ISTORE, не рендерился как "this"
         // (иначе выходит "new double[this]", "iVar29 >= this").
+        SPLIT_SLOTS.clear();
+        collectSlotSegments(mn);
         classifyArrayStores(mn, out);
         classifyArrayElements(mn, out);
         classifyPrimitiveStores(mn, out);
@@ -594,6 +596,52 @@ int n = out.length;
             return false;
         }
         return true;
+    }
+    /** Слот -> (индекс инструкции -> тип): сегменты для slot splitting. */
+    public static final java.util.Map<Integer, java.util.TreeMap<Integer, String>> SLOT_SEGMENTS =
+            new java.util.HashMap<>();
+    public static int SLOT_CONFLICTS;
+    public static final java.util.Map<Integer, String> SPLIT_SLOTS = new java.util.HashMap<>();
+
+    /** Собирает сегменты для слотов, в которые пишут и массив, и примитив. */
+    private static void collectSlotSegments(MethodNode mn) {
+        AbstractInsnNode[] insns = mn.instructions.toArray();
+        java.util.Map<Integer, java.util.TreeMap<Integer, String>> all = new java.util.HashMap<>();
+        for (int i = 0; i < insns.length; i++) {
+            if (!(insns[i] instanceof VarInsnNode v)) continue;
+            int op = v.getOpcode();
+            String t = switch (op) {
+                case Opcodes.ISTORE -> "int";
+                case Opcodes.LSTORE -> "long";
+                case Opcodes.FSTORE -> "float";
+                case Opcodes.DSTORE -> "double";
+                case Opcodes.ASTORE -> {
+                    String at = null;
+                    try {
+                        at = arrayTypeOf(previousReal(insns, i), null);
+                    } catch (RuntimeException ignored) {
+                    }
+                    yield at != null ? at : "ref";
+                }
+                default -> null;
+            };
+            if (t == null) continue;
+            all.computeIfAbsent(v.var, k -> new java.util.TreeMap<>()).put(i, t);
+        }
+        for (var e : all.entrySet()) {
+            boolean prim = false, arr = false;
+            for (String t : e.getValue().values()) {
+                if (t.endsWith("[]")) arr = true;
+                else if (java.util.Set.of("int", "long", "float", "double").contains(t)) prim = true;
+            }
+            if (arr && prim) {
+                SLOT_CONFLICTS++;
+                SLOT_SEGMENTS.put(e.getKey(), e.getValue());
+                String at = null;
+                for (String t : e.getValue().values()) if (t.endsWith("[]")) at = t;
+                if (at != null) SPLIT_SLOTS.put(e.getKey(), at);
+            }
+        }
     }
     private static String popStr(java.util.Deque<String> st) {
         if (st.isEmpty()) return null;
