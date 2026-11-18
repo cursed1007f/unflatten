@@ -93,11 +93,18 @@ public final class Main {
             } else if (keyPath != null) {
                 System.err.println("Предупреждение: --key файл не найден, строки будут помечены, не расшифрованы");
             } else {
-                byte[] embedded = EmbeddedSecretFinder.findSecret(jar);
-                if (embedded != null) {
-                    decryptor = new StringDecryptor(embedded);
-                    decryptor.load(findDatResource(jar));
-                    System.err.println("Найден вшитый в байткод секрет, строки будут расшифрованы");
+                var found = decompiler.ast.NativeKeyExtractor.discover(jar);
+                if (found != null) {
+                    decryptor = found.decryptor();
+                    System.err.println("Найден мастер-секрет StringCrypto (" + found.source()
+                            + "), строки будут расшифрованы");
+                } else {
+                    byte[] embedded = EmbeddedSecretFinder.findSecret(jar);
+                    if (embedded != null) {
+                        decryptor = new StringDecryptor(embedded);
+                        decryptor.load(findDatResource(jar));
+                        System.err.println("Найден вшитый в байткод секрет, строки будут расшифрованы");
+                    }
                 }
             }
         } catch (Exception ex) {

@@ -75,6 +75,11 @@ public final class StringDecryptor {
         return data.containsKey(className);
     }
 
+    /** Имена классов, для которых загружены блобы (для автопроверки ключа). */
+    public java.util.Set<String> classes() {
+        return data.keySet();
+    }
+
     /**
      * Расшифровывает строку класса по индексу.
      *
