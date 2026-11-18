@@ -1299,10 +1299,10 @@ public final class StructureToAst {
         var emu = newEmu();
         Ast.Expr key = emu.extractSwitchKey(bb.getInstructions());
         if (key == null) return null;
-        if (!emu.lastStatements().isEmpty()) {
-            throw new UndecompilableException(
-                    UndecompilableException.Kind.OTHER, "switch key prelude");
-        }
+        java.util.List<Ast.Stmt> prelude = new ArrayList<>(emu.lastStatements());
+
+
+
         // Диспетчер эмитится как заголовок switch — учитываем как normal-эмиссию.
         normalEmits.merge(blockIndex, 1, Integer::sum);
 
@@ -1335,7 +1335,11 @@ public final class StructureToAst {
         }
         List<Ast.Stmt> dfltBody = dfltBlock != null && dfltBlock < blocks.size()
                 ? blockToStmt(dfltBlock) : new ArrayList<>();
-        return new Ast.Switch(key, cases, dfltBody);
+        Ast.Switch sw = new Ast.Switch(key, cases, dfltBody);
+        if (prelude.isEmpty()) return sw;
+        java.util.List<Ast.Stmt> all = new ArrayList<>(prelude);
+        all.add(sw);
+        return new Ast.Block(all);
     }
 
 /** РћРїРµСЂР°С‚РѕСЂС‹ РґР»СЏ РѕРґРЅРѕРіРѕ CFG-Р±Р»РѕРєР°: Р±Р°Р№С‚РєРѕРґ Р±Р»РѕРєР° -> (РїСЂРёСЃРІР°РёРІР°РЅРёСЏ + return). */
