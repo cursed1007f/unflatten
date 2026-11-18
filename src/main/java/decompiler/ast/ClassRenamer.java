@@ -101,7 +101,12 @@ public final class ClassRenamer {
             String base = simple(internal);
             int dpos = base.indexOf('$');
             if (dpos > 0) base = base.substring(0, dpos);
-            String name = unique(sanitize(pascal(best(score)) + suffix(s)), used);
+            String tok = best(score);
+            if (tok == null || tok.length() <= 4) {
+                String sup = supertypeSuffix(s);
+                if (sup != null) tok = sup;
+            }
+            String name = unique(sanitize(pascal(tok) + suffix(s)), used);
             RENAMED.put(internal, pkg + "/" + name);
         }
         // Вложенные: если внешний переименован — тот же пакет, ИмяВнешнего$Внутренний
@@ -145,6 +150,7 @@ public final class ClassRenamer {
         List<String> methods = List.of();
         List<String> fields = List.of();
         List<String> strings = List.of();
+        List<String> types = List.of();
         boolean allStatic = true;
         boolean hasOnHandler;
 
@@ -180,6 +186,14 @@ public final class ClassRenamer {
                 }
             }
             s.strings = ss;
+            java.util.Set<String> ts = new java.util.LinkedHashSet<>();
+            if (cn.fields != null) for (FieldNode f : cn.fields) addType(ts, f.desc);
+            if (cn.methods != null) for (MethodNode m : cn.methods) {
+                addType(ts, m.desc);
+                addType(ts, m.signature);
+            }
+            addType(ts, cn.superName);
+            s.types = new ArrayList<>(ts);
             return s;
         }
     }
@@ -224,7 +238,7 @@ public final class ClassRenamer {
         }
         int uppers = 0;
         for (int i = 1; i < core.length(); i++) if (Character.isUpperCase(core.charAt(i))) uppers++;
-        if (core.length() >= 8 && uppers >= 2) return true;
+        if (core.length() >= 6 && uppers >= 2) return true;
         if (core.length() >= 6 && transitions >= 3) return true;
         if (core.length() >= 8 && transitions >= 2 && core.indexOf('a') < 0 && core.indexOf('e') < 0) return true;
         // «спам» из похожих символов I/l/1/O/0 (IllIlIIIIIIlII) — типичный обфускатор
@@ -256,6 +270,7 @@ public final class ClassRenamer {
         for (String m : s.methods) tokens(score, m, 2);
         for (String f : s.fields) tokens(score, f, 1);
         for (String str : s.strings) tokens(score, str, 1);
+        for (String ty : s.types) tokens(score, simple(ty), 2);
         return score;
     }
 
@@ -348,6 +363,16 @@ public final class ClassRenamer {
         return !s.methods.isEmpty();
     }
 
+    /** Добавляет в набор простое имя типа из дескриптора/сигнатуры. */
+    private static void addType(java.util.Set<String> out, String desc) {
+        if (desc == null) return;
+        try {
+            org.objectweb.asm.Type t = org.objectweb.asm.Type.getType(desc);
+            if (t.getSort() == org.objectweb.asm.Type.ARRAY) t = t.getElementType();
+            if (t.getSort() == org.objectweb.asm.Type.OBJECT) out.add(t.getInternalName());
+        } catch (RuntimeException ignored) {
+        }
+    }
     private static String best(Map<String, Integer> score) {
         String best = null;
         int bestScore = 0;
@@ -415,6 +440,7 @@ public final class ClassRenamer {
             for (String m : s.methods) tokens(score, m, 2);
             for (String f : s.fields) tokens(score, f, 1);
         for (String str : s.strings) tokens(score, str, 1);
+        for (String ty : s.types) tokens(score, simple(ty), 2);
             candidate = best(score);
         }
         String base = (candidate != null ? pascal(candidate) : "Inner");
