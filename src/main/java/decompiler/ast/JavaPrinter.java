@@ -58,7 +58,7 @@ public final class JavaPrinter {
             indent++;
             for (Ast.Stmt t : i.thenBranch()) stmt(t);
             indent--;
-            if (i.elseBranch() != null && !i.elseBranch().isEmpty()) {
+            if (i.elseBranch() != null && !isEffectivelyEmpty(i.elseBranch())) {
                 pad(); sb.append("} else {\n");
                 indent++;
                 for (Ast.Stmt e : i.elseBranch()) stmt(e);
@@ -136,6 +136,19 @@ public final class JavaPrinter {
         return b.toString();
     }
 
+    /** Ветвь без видимых операторов: Nop, пустые блоки. */
+    static boolean isEffectivelyEmpty(java.util.List<Ast.Stmt> body) {
+        if (body == null || body.isEmpty()) return true;
+        for (Ast.Stmt s : body) {
+            if (s instanceof Ast.Nop) continue;
+            if (s instanceof Ast.Block b) {
+                if (!isEffectivelyEmpty(b.body())) return false;
+                continue;
+            }
+            return false;
+        }
+        return true;
+    }
     private String expr(Ast.Expr e) {
         if (e == null) return "?";
         if (e instanceof Ast.Literal l) {
