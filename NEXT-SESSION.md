@@ -492,3 +492,12 @@ lost block: 13 BB + 2 handler = 15 (s40) -> 16 BB + 2 handler = 18 (s41); +3 р�
 - **slash-obf-legit/bytecode/renamed**: без изменений — 1816 survived, 126 undecompilable (prelude этого вида там не встречался).
 
 **Осталось из бэклога:** multi-block try range (+32 CFR).
+## Сессия s133 — multi-block try range: попытка отклонена
+
+**Сделано:** `rangeBlocks(start, end)` + emission всех блоков диапазона как try-body (с пометкой consumed); bail заменён на попытку.
+
+**Результат (slash-obf):** survived без изменений (1816), но `other` 100 -> **63**, `lost block` 21 -> **58**. То есть методы переехали из «честного отказа» в «потерянные блоки» — это хуже. CFR-эффект не проверялся: при такой деградации на основном наборе он не оправдан.
+
+**Откат:** дерево = d8bb5a6; other 100, lost block 21, survived 1816, гейт bad 73/real 39.
+
+**Вывод:** multi-block try range требует регион-структуры (объединение блоков в регион с сохранением вложенности), а не простой конкатенации тел блоков — как и предполагалось ранее («region-enclosure»). Бэклог по точечным доборам закрыт: 2 из 3 сделаны (switch key prelude +7, loop header prelude +190 на slashW), третий требует региона.
