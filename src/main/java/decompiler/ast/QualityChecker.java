@@ -177,6 +177,28 @@ public final class QualityChecker {
             Pattern.compile("\\(Object\\)\\s*\\S|\\bcast\\s*\\(Object\\)");
 
     // new Object( - пустой конструктор-заглушка
+    /** "Мёртвое" присваивание: имя переменной больше нигде в классе не встречается. */
+    static int DEBUG_DEAD;
+    private static int countDeadIvarConst(String java) {
+        Pattern p2 = Pattern.compile("\\b([ilfdo]Var\\d+)\\s*=\\s*-?\\d+(?:\\.\\d*)?[LlFfDd]?;");
+        var m = p2.matcher(java);
+        java.util.Map<String, Boolean> checked = new java.util.HashMap<>();
+        int dead = 0;
+        while (m.find()) {
+            String name = m.group(1);
+            Boolean d = checked.get(name);
+            if (d == null) {
+                Pattern p = Pattern.compile("\\b" + Pattern.quote(name) + "\\b");
+                int occ = 0;
+                var mm = p.matcher(java);
+                while (mm.find() && occ < 2) occ++;
+                d = occ <= 1;
+                checked.put(name, d);
+            }
+            if (d) dead++;
+        }
+        return dead;
+    }
     private static int countEmptyBodies(String java) {
         int n = 0;
         int i = 0;
@@ -219,7 +241,7 @@ public final class QualityChecker {
         r.dumbThrow = count(THROW_NUM, java) + count(THROW_PRIM_VAR, java);
         r.castObject = count(CAST_OBJECT, java);
         r.newObject = count(NEW_OBJECT, java);
-        r.deadIVarConst = count(DEAD_IVAR_CONST, java);
+        r.deadIVarConst = countDeadIvarConst(java);
         r.returnZero = count(RETURN_ZERO, java);
         r.undecompilable = countAll("// undecompilable:", java);
         // Независимый учёт по точной метке причины: other — это только

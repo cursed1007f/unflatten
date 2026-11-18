@@ -281,6 +281,7 @@ public final class Main {
         decompiler.ast.JavaClassPrinter.CLINIT_RETURN_STRIPPED.set(0);
         // Чекер качества агрегирует маркеры по всем классам и печатает отчёт в stderr.
         final QualityChecker.Report q = new QualityChecker.Report();
+        final java.util.List<Object[]> worst = new java.util.ArrayList<>();
         final int[] siteBudget = {8}; // печатаем места >= this только для первых N классов
         JarParser.parse(jar, (p, entry, node) -> {
             ClassNode cn = node;
@@ -310,6 +311,7 @@ public final class Main {
                 rep.className = display;
                 if (!rep.cmpThisSites.isEmpty() && siteBudget[0]-- > 0) rep.printCmpThisSites();
                 q.merge(rep);
+                worst.add(new Object[]{display, rep});
             } catch (Exception ex) {
                 classErrors[0]++;
                 StackTraceElement at = ex.getStackTrace().length > 0 ? ex.getStackTrace()[0] : null;
@@ -325,6 +327,15 @@ public final class Main {
                     + " real=" + gateReal[0] + " codes=" + gateCodes);
         }
         System.err.println(q.summary());
+        worst.sort((x, y) -> ((decompiler.ast.QualityChecker.Report) y[1]).score() - ((decompiler.ast.QualityChecker.Report) x[1]).score());
+        int shown = 0;
+        for (Object[] w : worst) {
+            if (shown++ >= 12) break;
+            decompiler.ast.QualityChecker.Report r2 = (decompiler.ast.QualityChecker.Report) w[1];
+            System.err.println("worst: " + w[0] + " score=" + r2.score() + " qm=" + r2.questionMark
+                    + " dead=" + r2.deadIVarConst + " ret0=" + r2.returnZero + " empty=" + r2.emptyBodies
+                    + " unsup=" + r2.unsupportedOps + " ctor=" + r2.ctorInit + " castObj=" + r2.castObject);
+        }
         System.err.println(String.format("methods: total=%d survived=%d undecompilable=%d",
                 methodsWithCode[0], methodsWithCode[0] - q.undecompilable, q.undecompilable));
         System.err.println(String.format(
