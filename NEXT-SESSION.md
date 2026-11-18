@@ -626,3 +626,95 @@ lost block: 13 BB + 2 handler = 15 (s40) -> 16 BB + 2 handler = 18 (s41); +3 р�
 **3. Цикл исправлений по чекеру.** Реальных дефектов не осталось: score **2**, `dead=0`, `ret0=2` — оба остатка являются промахами эвристики определения сигнатуры во вложенных конструкциях, а не дефектами декомпилятора. `emptyBodies` 55 (косметика), `unsup` — наши собственные bail-заглушки.
 
 **Состояние:** дерево = 87e90a0, гейт bad 59 / real 14, 0-100 = 91, survived 1816, тесты зелёные.
+## Сессия s167 — try-регион: реализован, измерен, откачен
+
+**Цель:** закрыть known gap «регион-структура для try» (маркер `multi-block try range`), ожидание +32 survived на CFR.
+
+**Сделано, итерация 1 (AST-уровень).** `convertSequence` как единая точка эмиссии sibling-узлов + перехват многоблочного range: последующие узлы с блоками внутри диапазона уходят в try-тело. Эффекта нет: у if внутри try join-блок стоит за границей range'а, `coveredBlocks()` узла не ⊆ региона, перехват не срабатывает. Откачено внутри сессии.
+
+**Сделано, итерация 2 (структурный регион).**
+- `StructureNode.Kind.TRY` (+ `tryFrom/tryTo/tryHandler/tryType`), фабрика `tryRegion(…)`.
+- `StructureRecoverer`: try-таблица и label→block карта, `tryRegionNode()` — поддерево по блокам диапазона (`available` = регион), обёртка в TRY-узел; продолжение после региона — первый преемник за его пределами (end-блок может быть изолированным, из-за этого терялся join).
+- `StructureToAst`: ветка `Kind.TRY` (try-тело + `buildCatchClause`), `suppressedTryStarts` — чтобы try не оборачивался повторно внутри своего же тела.
+- Диагностика: `TRYREGION_DEBUG=1` (принятые/отклонённые регионы, причина), `LOSTTRACE` (карта блоков при `lost block`).
+
+**Метрики.**
+- slash-obf-legit: survived 1816 → **1818**, undecompilable 126 → 124, lost block 21 → **36**, other 100 → 83, маркеров `multi-block try range` 45 → **25**; гейт bad 59 / real 14 без изменений; class-level 0.
+- CFR: survived 7610 → **7620**, undecompilable 429 → 419, lost block 228 → **239**, other 194 → 173; гейт bad 708, real 562 → 563.
+- Тесты зелёные в обеих итерациях.
+
+**Почему откачено.** По критерию s133 методы переехали из «честного отказа» (`other`) в «потерянные блоки»: +26 lost block при +12 survived. Причины потерь: `buildFrom` при >2 преемниках идёт только в первого (обфусцированные goto-цепочки и switch-подобные блоки), свёртка константных предикатов выкидывает мёртвую ветвь, но она остаётся в регионе, а цикл внутри try может иметь латчи за диапазоном. Проверка `coveredBlocks()` оказалась слабой: LOOP-узел «покрывает» `loopBody`, но печатает не все блоки.
+
+**Состояние:** дерево откачено к **51f6687** (`git checkout` пяти файлов), `classes`/`test` зелёные, метрики = baseline.
+
+**Если возвращаться к теме:** регион должен быть первоклассным узлом CFG до восстановления структуры (как switch-диспетчер): разложить блоки с >2 преемниками, не сворачивать предикаты внутри try, и проверять эмиссию dry-run'ом по региону, а не по `coveredBlocks()`.
+## Сессия s168 — декодер строк RT.dStr (нативная линия: ключ не понадобился)
+
+**Разведка нативки (s167 хвост).**
+- `slashmem.dll` (668 КБ) — JNI-шим: 4 экспорта `Java_ru_slash_protect_NativeBootstrap_*` (`loadNative/nativeInit/nativeDecrypt/nativeReady`), внутри строки `slashnative.dll`, `native exports missing`.
+- `slashnative.dll` (6.0 МБ) — 9 экспортов `sv_native_*` (`init/ready/warmup/decrypt/decrypt_bytes/manifest_load/verify_class/check_integrity/check_debugger`), символы `init_master_key/master_key_init/master_key/master_once/clean_master_key`, OpenSSL (AES-NI GCM, SHA1/256).
+- Открытого ключа нет: ни base64 43/44, ни hex 32/64, ни `SVSB`/`master`/`keyFor` в строках.
+- `NativeBootstrap` (`IYg$4724`): natives `YgiqvM(byte[])`, `aRzi()`, `SSU(byte[],int)`, `Pnv(String,int,byte[],int)` — ключ в Java не передаётся, `keyFor` целиком в нативке.
+- `slashW`: `andromeda_core` (9 файлов, 16–66 КБ) — только `JNI_OnLoad`/`abi`/`wear`; строки в slashW не шифруются.
+- **Ключевая находка:** `obf/rt/RT.dStr` — чистый Java XOR-декодер (seed = последний символ; `k = (seed^90)|10368889`; байт = `c ^ (k>>>8) ^ (k&0xff)`; `k = k*-2048144789 + 43`), нативку не вызывает.
+
+**Сделано.**
+1. `StringXorDecoder` — алгоритм снят с байткода `RT.dStr`; `decode()`, `looksLikeText()`, `decodeIfCipher()` (декодирует только шифртекст, обычные строки не трогает).
+2. `BytecodeToExpr.doCall`: константная свёртка `X.dStr("…")` → литерал, если результат похож на текст.
+3. `ClassRenamer.Signals.of`: LDC-строки декодируются перед токенами имён и темами пакетов (длина токена до 40).
+
+**Эффект.**
+- Строки: маркеров `<!-- enc:` **0**, `dStr(` в выводе 23 (неконстантные аргументы), читаемые литералы (`Mace: fall=%.2f gd=%.2f vy=%.2f dist=%s …`, `SAFE MODE`, `default`, `ON/OFF`, `Target`).
+- Пакеты: mod 130 → **114**, util 49 → 45, math 16 → 18, ui 9 → **18**, world 8 → **14**, data 9 → 10, audio 1 → 2, ml 1 (новый).
+- Имена: `Slash`, `Target`, `Jump`, `Sprint`, `Sound`, `Trail`, `Rename`, `Features` (вместо `EWz`/`AGGs`-подобных).
+- Гейт: bad **59 → 60** (+1 класс), real 14 без изменений; survived 1816, undecompilable 126, class-level 0; БАЛЛ 2, 0-100 **91**; тесты зелёные.
+- `+1 bad` принят по прецеденту s131: рост имён/пакетов при неизменном survived; гипотеза — простая коллизия имени с внешним типом, фикс (проверка по внешним simple-именам) — следующий шаг.
+## Сессия s169 — мастер-секрет нативного дешифратора извлечён
+
+Инструменты: `pefile` 2024.8.26 + `capstone` 5.0.7 (Python 3.12). Файл: `assets/slash/native/slashnative.dll` (6.0 МБ, 9 экспортов `sv_native_*`, COFF-таблица 43 556 символов).
+
+**Ключевые адреса (RVA).**
+- `sv_native_init` 0x2040 (магия `SVSB`), `sv_native_manifest_load` 0x1c70 (магия `SVNT`), `sv_native_decrypt` 0x1830, `sv_native_decrypt_bytes` 0x1a20.
+- `class_key.part.0` 0x1790 — SHA256: `secret32 || "strings" || "t" || className`.
+- `g_secret` 0x48d060 (32 байта), `g_has_secret` 0x48d040, `master_key` 0x48d368, `master_once` 0x48d360.
+
+**Мастер-секрет (два кандидата, выбор по ветке).**
+- Ветка `check_debugger() != 0` — константа в `.rdata` 0x363d58:
+  `19196419c87d32d1494939497270923b494939497270923bd9d943d9869aaf5f`
+- Обычная ветка — деобфускация таблицы 0x363de4 (32 байта) циклом из `sv_native_init`:
+  `al = ror(al ^ dl, cl); al += r8; edx += 0x1f; ecx += 3; r8 -= 7`, старт `edx=0x11, r8=-11, ecx=5`:
+  `d9b84c27b8bbd1fae188130f3bdb0520cce8bf8c4f24ddeecd9888747f0183ea`
+
+**Разделители ключа:** 7 байт `737472696e6773` (`"strings"`) по 0x366037 и 1 байт `74` (`"t"`) по 0x366038. Итого `class_key = SHA256(secret || "strings" || "t" || className)` (32 байта AES-256).
+
+**Форматы.**
+- `sv_native_init(blob, len, secret, secretLen)`: если `secretLen > 0`, копирует до 32 байт `secret` в `g_secret`; при `secretLen <= 0` берёт секрет из ветки выше. JNI-шим `slashmem.dll` (`nativeInit`) передаёт `len=0`, `secret` — свой кэш-буфер, поэтому работает встроенная ветка.
+- `SVSB`: `"SVSB"` + count (4 байта BE на +5, предел 0x1869f) + записи; `SVNT` (manifest): `"SVNT"` + count BE + записи `u16 BE len, name, 32 байта` (структура 0x28 байт: имя, данные, счётчик, таблица индексов).
+- `sv_native_decrypt(name, idx)` ищет класс по имени в таблице 32-байтовых записей (`strcmp`), затем собирает вход из таблицы индексов и вызывает `aes_gcm_decrypt` (0x1560).
+
+**Проверка end-to-end невозможна на текущих артефактах:** ни в `slash-obf-legit.jar`, ни в `slashW.jar` нет ни `SVSB`, ни `SVNT` (0 попаданий). Строки `slash-obf` идут через Java-декодер `RT.dStr` (s168) и мастер-секрет не требуют; `slashW` строки не шифрует. Рецепт ключа подтверждён дизассемблером, но не сверен с реальным шифртекстом.
+
+**Следующий шаг:** добыть `SVSB`-блоб/`SVNT`-manifest из другого билда (native-вариант, assets), затем проверить `aes_gcm_decrypt` (порядок nonce/tag) и сравнить расшифровку с Java `StringDecryptor`.
+## Сессия s170 — NativeKeyExtractor: секрет из Java, SVSB расшифрован
+
+**Артефакт:** `C:\Users\User\Desktop\slashvisuals-1.0-SNAPSHOT-obf.jar` (58.7 МБ, 760 классов, 1362 записи).
+- `assets/slashvisuals/native/slashnative.dll` (6 023 126 Б, sha1 `297f5317…`) — тот же код, что в slash-obf, константы идентичны (fallback `19196419…`, derived `d9b84c27…`).
+- `ya_ne_ponimayu_6.dat` — SVSB-блоб (187 380 Б, 655 классов, 305 со строками).
+- `y0_ban_tut_5.bin` — SVNT-манифест (1032 записи `u16 len, name, 32 байта` — хеши jar'ов, не строки).
+
+**Ключевая находка:** рабочий секрет лежит в байткоде, а не в DLL: `com/google/re2j/QGkUl.master()` возвращает base64 `x5Nsa8rGfniq368y/yNAKpYd0KMz7b9GfaiHpbWdqRM=` → 32 байта `c7936c6b…59da913`. `keyFor(name)` = `SHA-256(secret || "strings" || 0x00 || name)`; нагрузка `nonce(12) || ct || tag(16)`, AES-256-GCM. Нативные константы — ветка anti-debug, реальные строки ею не расшифровываются.
+
+**Проверка на реальном блобе:** расшифрованы `LEFT`, `OFFLINE`, `0`, `slashvisuals`, `Ambience`, `ambience.panel.mapSelection` (тег GCM проходит только с верным ключом).
+
+**Сделано.**
+1. `decompiler/ast/NativeKeyExtractor.java` — находит в jar SVSB-ресурс, собирает base64-константы 44 символа → 32 байта, проверяет кандидата расшифровкой блоба (GCM-тег), возвращает `StringDecryptor` + источник.
+2. `StringDecryptor.classes()` — перечисление классов блоба для автопроверки.
+3. `Main`: `NativeKeyExtractor.discover(jar)` до `EmbeddedSecretFinder`; сообщение «Найден мастер-секрет StringCrypto (base64(32B))».
+4. `StringDecryptorTest` — вектор из реального блоба (`LEFT`) и отказ при неверном ключе.
+
+**Прогон на slashvisuals (--ast):** methods 8870, survived **8066**, undecompilable 804, class-level 0; маркеров `<!-- enc: -->` **0**, `slashvisuals` в выводе 911 раз. Тесты зелёные.
+
+**Ограничение:** ключ найден эвристикой по 44-символьному base64; если обфускатор сменит длину/кодировку, понадобится словарь мастер-констант. Деобфускация секрета из DLL (константы 0x363d58/0x363de4) реализована в разведке s169, но в этих билдах не нужна.
+
+
+
