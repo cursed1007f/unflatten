@@ -865,6 +865,33 @@ int cannot be converted to boolean»**. Причина: тип возврата 
 (инвок возвращает объект, локал/темп остаётся `Object`) — отдельная проблема типизации темпов
 на объектные типы, не Z. Записано в IMPROVEMENTS.md.
 
+## Сессия s182 — Object→T: типизация object-темпов из возврата вызова/метода
+
+**Диагноз.** После s181 остаток `prob.found.req` — это `Object cannot be converted to T`.
+Пример `mod/Cls`: `java.lang.String O00000000(...)` — phi-темп объявлен `Object t3_0`, обе
+ветки дают `String` (`""` и конкатенацию), `return t3_0` даёт ошибку. Причина та же,
+что в s181: тип темпов из StackValue — `Object`; конкретный тип известен из возврата
+`Ast.Call.retDesc` и из `Ast.Return` в методе с объектным возвратом.
+
+**Сделано.** `StructureToAst.normalizeObjectTemps(res, retDesc)` — аналог `normalizeArrayTemps`
+для не-массивных ссылок: seed из `Ast.Return` (переменная получает тип возврата метода),
+плюс promotion: `Object`-темп, которому присваивают вызов с `retDesc`-ссылкой или локал
+не-`Object`-типа, получает этот тип (3 раунда, затем правка `VarDecl`).
+
+**Гейт SpaceVisuals (bad 222 → 208, real 129 → 128).**
+- ушло 14 bad-классов (`mod/Cls`, `ui/Spacevisuals81`, `util/Global`, `util/Offer`,
+  `util/TargetTimestamp`, `util/Potions`, `util/Auto`, `mod/Medium`, `util/MacInner` и др.),
+  новых **0**; `real` 129 → 128.
+- survived 4514/5178 / undecompilable 664 / class-level 0 — без изменений.
+
+**Контроль slash-obf-legit:** bad **38 → 30**, real **7 → 7** (без изменений), survived
+1816/1942, class-level 0. Регрессии нет — улучшение на обоих наборах.
+
+**Тесты:** зелёные (failures 0, 1 skipped — nested try).
+
+**Остаток `prob.found.req` (после s182):** это уже не Z и не Object-темпы-в-return, а
+остаточные нерезолвимые типы/перегрузки (см. IMPROVEMENTS.md).
+
 
 
 Тесты зелёные.

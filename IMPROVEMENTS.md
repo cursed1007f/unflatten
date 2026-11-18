@@ -116,5 +116,16 @@ slash-obf: bad 56 → **38**, real 7 без изменений. Регресси
 локалов/темпов на объектные типы из возврата вызова (как для массива в normalizeArrayTemps,
 но для Object → объявленный тип). Это следующий шаг, не Z.
 
+## Результат s182: Object→T (типизация object-темпов)
+
+`normalizeObjectTemps(res, retDesc)` — аналог `normalizeArrayTemps` для не-массивных ссылок:
+seed из `Ast.Return` (переменная → тип возврата метода), promotion `Object`-темпов из
+`Ast.Call.retDesc`-ссылки и не-`Object`-локалов. SpaceVisuals: bad 222 → **208**,
+real 129 → **128**, ушло 14 bad-классов (`mod/Cls`, `util/Global`, `util/Offer` и др.),
+survived 4514 без изменений; slash-obf: bad 38 → **30**, real 7. Регрессий нет.
+
+**Остаток `prob.found.req` (после s182):** остаточные нерезолвимые типы/перегрузки; конкретный
+новый шаг — смотреть оставшиеся bad-классы по текстам ошибок в гейте.
+
 
 

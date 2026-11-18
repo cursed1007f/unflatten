@@ -663,6 +663,7 @@ public final class StructureToAst {
             target.addAll(at, decls);
             normalizeBooleanLiterals(res, isBooleanReturn(method.desc));
             normalizeArrayTemps(res);
+            normalizeObjectTemps(res, method.desc.substring(method.desc.indexOf(')') + 1));
             fixDeclTypes(res);
         }
         return res;
@@ -825,6 +826,64 @@ public final class StructureToAst {
             return null;
         }
         return base + "[]".repeat(dims);
+    }
+
+    /**
+     * Object-темпы/локалы, значение которых на самом деле конкретного типа: из возврата
+     * вызова с дескриптором-ссылкой (Ast.Call.retDesc) и из параметра value-ветки.
+     * Аналог normalizeArrayTemps для не-массивных ссылок (Object → объявленный тип).
+     */
+    private static void normalizeObjectTemps(java.util.List<Ast.Stmt> res, String retDesc) {
+        java.util.Map<String, String> decl = new java.util.HashMap<>();
+        walkStmts(res, l -> {
+            for (Ast.Stmt s : l) if (s instanceof Ast.VarDecl d) decl.put(d.name(), d.type());
+        });
+        java.util.Set<String> changed = new java.util.HashSet<>();
+        // seed: переменная, возвращаемая методом — тип возврата метода (если Object).
+        String retType = retDesc != null && !retDesc.equals("V")
+                ? Ast.friendlyType(retDesc) : null;
+        for (int round = 0; round < 3; round++) {
+            final boolean[] any = {false};
+            walkStmts(res, l -> {
+                for (Ast.Stmt s : l) {
+                    if (s instanceof Ast.Return r
+                            && r.value() instanceof Ast.Var v
+                            && retType != null && !retType.isEmpty()
+                            && !retType.equals("Object") && !retType.equals("java.lang.Object")
+                            && isObjectish(decl.get(v.name()))) {
+                        decl.put(v.name(), retType);
+                        changed.add(v.name());
+                        any[0] = true;
+                    }
+                    if (!(s instanceof Ast.Assign a) || !(a.target() instanceof Ast.Var t)) continue;
+                    String cur = decl.get(t.name());
+                    if (!isObjectish(cur)) continue;
+                    String from = null;
+                    if (a.value() instanceof Ast.Call c && c.retDesc() != null) {
+                        String ct = Ast.friendlyType(c.retDesc());
+                        if (!ct.isEmpty() && !ct.equals("V") && !isObjectish(ct)) from = ct;
+                    } else if (a.value() instanceof Ast.Var v2) {
+                        String vt = decl.get(v2.name());
+                        if (vt != null && !vt.isEmpty() && !isObjectish(vt) && !vt.endsWith("[]")) from = vt;
+                    }
+                    if (from != null) {
+                        decl.put(t.name(), from);
+                        changed.add(t.name());
+                        any[0] = true;
+                    }
+                }
+            });
+            if (!any[0]) break;
+        }
+        if (changed.isEmpty()) return;
+        walkStmts(res, l -> {
+            for (int i = 0; i < l.size(); i++) {
+                if (l.get(i) instanceof Ast.VarDecl d && changed.contains(d.name())
+                        && !"boolean".equals(d.type())) {
+                    l.set(i, new Ast.VarDecl(decl.get(d.name()), d.name()));
+                }
+            }
+        });
     }
 
     /** Дескрипторное имя ("[I", "[I[]") -> валидный Java-тип ("int[]"). */
