@@ -1,6 +1,6 @@
 # STATUS — текущее состояние декомпилятора
 
-Сводка на конец сессии 172 (s167 try-регион откачен; s168 — декодер RT.dStr; s170–s172 — NativeKeyExtractor и ключ в DLL). Историю по сессиям см. в `NEXT-SESSION.md`.
+Сводка на конец сессии 174 (s167 try-регион откачен; s168 — декодер RT.dStr; s170–s172 — NativeKeyExtractor и ключ в DLL; s173 — словарь строк с IDF; s174 — IDF по методам/полям). Историю по сессиям см. в `NEXT-SESSION.md`.
 
 ## Метрики (замер на текущем HEAD)
 
@@ -23,6 +23,8 @@
 - **Пакеты** (AGENTS п.2): темы по внешним типам + вывод `package`; 8 тем вместо одной (`mod` 130, `util` 49, `math` 16, `ui` 9, `data` 9, `world` 8). Гейт bad 68 → 59, real 23 → 14.
 - **Декодер строк `RT.dStr`** (s168): `StringXorDecoder` (алгоритм снят с байткода, ключ не нужен), свёртка `X.dStr("…")` → литерал в `BytecodeToExpr.doCall`, декодирование LDC-строк в `ClassRenamer.Signals.of`. Маркеров `enc:` 0, пакеты `mod` 130 → 114, `ui` 9 → 18, `world` 8 → 14; гейт bad 59 → 60 (+1 принят по прецеденту s131), real 14, survived 1816 без изменений.
 - **NativeKeyExtractor** (s170): секрет `StringCrypto` найден в байткоде (`stringcrypto`-класс, `master()` = base64 32 Б), ключ `SHA-256(secret || "strings" || 0x00 || className)`, SVSB-блоб ищется в jar, кандидаты проверяются GCM-тегом. `slashvisuals-1.0-SNAPSHOT-obf`: маркеров `enc:` 0, `slashvisuals` в выводе 911 раз, survived 8066/8870, class-level 0.
+- **Словарь строк с IDF** (s173): `Signals.of` берёт строки класса из SVSB (нативный ключ) и LDC (`RT.dStr`), вес токена зависит от jar-wide df (≤2 → 3, ≤5 → 2, иначе 1). На `slashvisuals`: `mod` 137 → 125, `util` 179 → 126, `ui` 232 → 254; имён с цифрой 171 → 144, с префиксом `Cls/Util/Ui` 78 → 56; гейт bad 301 / real 161 (первый замер), survived 8065 без изменений.
+- **IDF по методам/полям** (s174): `dfTokens` по токенам имён методов/полей, бонус +2 при df ≤ 2 и +1 при df ≤ 5, `STRING_MAX_WEIGHT = 2`. На `slashvisuals`: цифровые имена 144 → 95, префиксные 56 → 23, `util` 126 → 108, `ml` 23 → 15; но `ui` 254 → 267, `mod` без сдвига (125), коротких имён больше (131 → 152). Гейт без изменений (301/161), survived 8065.
 - **Чекер качества** (AGENTS п.4): маркеры `/* ? */`, `.<init>`, `UnsupportedOperationException`, пустые тела; балл 0-100; вывод `worst:` — топ-12 классов.
 - **`return;` в `<clinit>`** — снимается, если стоит перед `}` (slashW: class-level 1 → 0).
 - **ASM 9.11** — поддержка классов major 72 (SpaceVisuals).
