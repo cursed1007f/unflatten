@@ -483,3 +483,12 @@ lost block: 13 BB + 2 handler = 15 (s40) -> 16 BB + 2 handler = 18 (s41); +3 р�
 **Гейт:** bad 72 -> 73, real 38 -> 39 — единственный новый bad-класс `IaNl\` с `cant.access` (не структурная поломка, а доступ/тип в новом методе).
 
 **Осталось из бэклога:** loop header prelude (+15 CFR, +190 slashW), multi-block try range (+32 CFR).
+## Сессия s132 — loop header prelude (+~190 на slashW)
+
+**Сделано:** тот же приём, что для switch: операторы, выработанные при вычислении условия цикла, печатаются перед while (прозрачный Ast.Block), bail убран.
+
+**Результат:**
+- **slashW**: метки loop header prelude **190 -> 0**, survived **4255**, undecompilable 1578, балл 786, other 273, lost block 1304.
+- **slash-obf-legit/bytecode/renamed**: без изменений — 1816 survived, 126 undecompilable (prelude этого вида там не встречался).
+
+**Осталось из бэклога:** multi-block try range (+32 CFR).
