@@ -172,7 +172,9 @@ public final class JavaPrinter {
                 }
                 return expr(b.left()) + " = " + expr(b.right());
             }
-            return "(" + expr(b.left()) + " " + b.op() + " " + expr(b.right()) + ")";
+            // Обычный бинарный оператор: скобки только по необходимости (приоритет/ассоциативность),
+            // чтобы не получать стены (((((a + b) + c) ...
+            return bin(b);
         }
         if (e instanceof Ast.Unary u) {
             // Операнд-бинарник обязан быть в скобках: !(a == b), (long)(a + b),
@@ -242,6 +244,63 @@ public final class JavaPrinter {
             return sb.append(")").toString();
         }
         return String.valueOf(e);
+    }
+
+    /** Приоритет оператора (выше = сильнее связывает). Неизвестный — 0. */
+    private static int prec(String op) {
+        return switch (op) {
+            case "||" -> 1;
+            case "&&" -> 2;
+            case "|" -> 3;
+            case "^" -> 4;
+            case "&" -> 5;
+            case "==", "!=" -> 6;
+            case "<", ">", "<=", ">=", "instanceof" -> 7;
+            case "<<", ">>", ">>>" -> 8;
+            case "+", "-" -> 9;
+            case "*", "/", "%" -> 10;
+            default -> 0;
+        };
+    }
+
+    /** Левый ассоциативен: цепочка a+b+c не требует скобок при равном приоритете. */
+    private static boolean leftAssoc(String op) {
+        return switch (op) {
+            case "*", "/", "%", "+", "-", "<<", ">>", ">>>" -> true;
+            default -> false;
+        };
+    }
+
+    /**
+     * Равенство приоритетов: правый ребёнок требует скобок ВСЕГДА, иначе левоассоциативная
+     * печать иначе сгруппирует: дерево a+(b-c) печатается "a + b - c" т.е. (a+b)-c.
+     * Левый ребёнок при равном приоритете скобок не требует (левое вложение печатается
+     * тождественно). Неизвестный оператор — скобки для верности.
+     */
+    private static boolean needsParens(String parentOp, String childOp, boolean leftChild) {
+        int p = prec(parentOp);
+        int c = prec(childOp);
+        if (c == 0 || p == 0) return true;
+        if (c > p) return false;   // ребёнок связывает сильнее — скобки не нужны
+        if (c < p) return true;
+        return !leftChild;         // равный приоритет: группировка справа обязана в скобках
+    }
+
+    private String bin(Ast.Binary b) {
+        boolean lpar = needsParens(b.op(), binOp(b.left()), true) && isBinary(b.left());
+        boolean rpar = needsParens(b.op(), binOp(b.right()), false) && isBinary(b.right());
+        String ls = lpar ? "(" + expr(b.left()) + ")" : expr(b.left());
+        String rs = rpar ? "(" + expr(b.right()) + ")" : expr(b.right());
+        return ls + " " + b.op() + " " + rs;
+    }
+
+    /** Оператор, если выражение — бинарник (для приоритета), иначе "" (никакой). */
+    private static String binOp(Ast.Expr e) {
+        return (e instanceof Ast.Binary b) ? b.op() : "";
+    }
+
+    private static boolean isBinary(Ast.Expr e) {
+        return e instanceof Ast.Binary;
     }
 
     private void pad() {
