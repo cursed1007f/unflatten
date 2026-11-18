@@ -998,6 +998,22 @@ public final class BytecodeToExpr {
     }
 
     private void doCall(MethodInsnNode m) {
+        // --- декодер строк обфускатора: RT.dStr(ciphertext) -> plaintext ---
+        // Ключа не требует: алгоритм снят с байткода самого декодера.
+        if (m.getOpcode() == Opcodes.INVOKESTATIC
+                && m.name.equals(StringXorDecoder.DECODER_NAME)
+                && m.desc.equals(StringXorDecoder.DECODER_DESC)
+                && !stack.isEmpty()) {
+            String cst = literalString(stack.peek());
+            if (cst != null) {
+                String dec = StringXorDecoder.decode(cst);
+                if (dec != null && !dec.equals(cst) && StringXorDecoder.looksLikeText(dec)) {
+                    pop();
+                    pushCat(lit(dec), 1);
+                    return;
+                }
+            }
+        }
         // --- распознавание дешифратора строк: LDC class; LDC idx; a(String,I)String ---
         if (m.getOpcode() == Opcodes.INVOKESTATIC
                 && m.name.equals("a")

@@ -187,8 +187,11 @@ public final class ClassRenamer {
                     for (var it = m.instructions.iterator(); it.hasNext() && ss.size() < 40; ) {
                         var insn = it.next();
                         if (insn instanceof org.objectweb.asm.tree.LdcInsnNode ldc
-                                && ldc.cst instanceof String str && str.length() >= 4 && str.length() <= 24) {
-                            ss.add(str);
+                                && ldc.cst instanceof String str) {
+                            // Строки обфускатора лежат шифртекстом; для токенов имени
+                            // нужен читаемый текст (декодер не требует ключа).
+                            String text = StringXorDecoder.decodeIfCipher(str);
+                            if (text.length() >= 4 && text.length() <= 40) ss.add(text);
                         }
                     }
                 }
