@@ -1,0 +1,22 @@
+// Embedded resources: decompiler jar + logo.
+#include <windows.h>
+
+IDR_JAR  RCDATA "..\\build\\java-decompiler-all.jar"
+IDR_LOGO RCDATA "logo.png"
+
+IDENTITY VERSIONINFO
+FILEVERSION 0,1,0,0
+PRODUCTVERSION 0,1,0,0
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904b0"
+    BEGIN
+      VALUE "FileDescription", "Unflatten Decompiler Loader"
+      VALUE "ProductName", "Unflatten Decompiler"
+      VALUE "FileVersion", "0.1.0"
+      VALUE "OriginalFilename", "loader.exe"
+    END
+  END
+END
+

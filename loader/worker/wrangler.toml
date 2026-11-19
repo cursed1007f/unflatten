@@ -1,0 +1,21 @@
+name = "restless-hhwwit-0e4f"
+main = "src/index.js"
+compatibility_date = "2026-11-19"
+
+# ВАЖНО: имя должно совпадать с уже созданным воркером,
+# иначе деплой заведёт новый и адрес вида
+# https://restless-hhwwit-0e4f.<subdomain>.workers.dev изменится.
+
+[[d1_databases]]
+binding = "DB"
+database_name = "jdec"
+database_id = "ВСТАВЬТЕ_ID_БАЗЫ"
+# ID смотреть: Dashboard -> Storage & Databases -> D1 -> jdec -> (ID вверху)
+
+# Секреты (не храните их здесь!) задаются командой:
+#   npx wrangler secret put ADMIN_CHAT_ID
+#   npx wrangler secret put KEYBOT_TOKEN
+#   npx wrangler secret put USERSBOT_TOKEN
+#   npx wrangler secret put HWIDBOT_TOKEN
+#   npx wrangler secret put HWIDBOT_ADMIN
+#   (по желанию) KEYBOT_WEBHOOK_SECRET, USERSBOT_WEBHOOK_SECRET, TZ

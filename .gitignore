@@ -19,3 +19,18 @@ Thumbs.db
 # Лог и временное
 *.log
 *.tmp
+# Локальные артефакты и секреты
+UNFLATTEN-INFO.md
+dist/
+loader/build/
+loader/dist-update/
+loader/server/license.db
+build-s*.txt
+commit-s*.txt
+tmp_out/
+tmp_repro/
+gradle/wrapper/gradle-wrapper-decompiled/
+*.exe
+dist-update/
+__pycache__/
+*.pyc

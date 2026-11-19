@@ -1,12 +1,21 @@
 package decompiler.gui;
 
+import decompiler.ast.ClassHierarchy;
+import decompiler.ast.ClassRenamer;
+import decompiler.ast.EmbeddedSecretFinder;
+import decompiler.ast.JavaExporter;
+import decompiler.ast.NativeKeyExtractor;
+import decompiler.ast.StringDecryptor;
 import decompiler.cfganalyzer.CfgBuilder;
 import decompiler.cfganalyzer.CfgDumper;
 import decompiler.dumper.ClassStructureDumper;
 import decompiler.parser.JarParser;
 import decompiler.ssa.SsaDumper;
 
+import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.FieldNode;
+import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
 import javax.swing.*;
@@ -20,7 +29,10 @@ import java.awt.dnd.DropTarget;
 import java.awt.dnd.DropTargetDropEvent;
 import java.io.File;
 import java.nio.file.Path;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -34,36 +46,29 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class DecompilerGui extends JFrame {
 
-    // Общая с обфускатором палитра
-    private static final Color BG = new Color(0x101318);
-    private static final Color CARD = new Color(0x181c23);
-    private static final Color CARD_HI = new Color(0x212734);
-    private static final Color LINE = new Color(0x2b3340);
-    private static final Color ACCENT = new Color(0x4c8dff);
-    private static final Color ACCENT_HI = new Color(0x6ba3ff);
-    private static final Color TEXT = new Color(0xe8ebf2);
-    private static final Color MUTED = new Color(0x8a93a6);
-    private static final Color GOOD = new Color(0x3ecf8e);
+    // Палитра как у лоадера Unflatten Decompiler
+    private static final Color BG = new Color(0x0a122e);
+    private static final Color CARD = new Color(0x0f1b3f);
+    private static final Color CARD_HI = new Color(0x16264f);
+    private static final Color LINE = new Color(0x2a3a66);
+    private static final Color ACCENT = new Color(0x2f6fff);
+    private static final Color ACCENT_HI = new Color(0x4f86ff);
+    private static final Color TEXT = new Color(0xe8efff);
+    private static final Color MUTED = new Color(0x8a9bc8);
+    private static final Color GOOD = new Color(0x3ce89a);
     private static final Color BAD = new Color(0xff6b6b);
 
     private final JLabel pathLabel = new JLabel("Перетащи jar сюда или выбери файл");
     private final JButton chooseBtn = new GhostButton("Выбрать jar…");
 
-    // Настройки вывода структуры
-    private final JCheckBox fieldsBox = new JCheckBox("Поля", true);
-    private final JCheckBox methodsBox = new JCheckBox("Методы", true);
-    private final JCheckBox countsBox = new JCheckBox("Счётчик инструкций", true);
-    private final JCheckBox accessBox = new JCheckBox("Access-флаги", false);
-    private final JCheckBox interfacesBox = new JCheckBox("Интерфейсы", true);
-
     private final JTextArea log = new JTextArea();
     private final JProgressBar progress = new JProgressBar();
-    private final JLabel status = new JLabel("Готов");
-    private final AccentButton runBtn = new AccentButton("Разобрать");
-    private final GhostButton cfgBtn = new GhostButton("Показать CFG");
-    private final GhostButton ssaBtn = new GhostButton("SSA форма");
-    private final GhostButton saveBtn = new GhostButton("Сохранить в файл");
-    private final GhostButton clearBtn = new GhostButton("Очистить журнал");
+    private final JLabel status = new JLabel("Перетащи jar — дальше всё само");
+    private final AccentButton runBtn = new AccentButton("Разобрать заново");
+    private final GhostButton openBtn = new GhostButton("Открыть папку");
+    private final GhostButton saveBtn = new GhostButton("Сохранить отчёт");
+    private final GhostButton clearBtn = new GhostButton("Очистить");
+    private Path lastOutDir;
 
     private File inputFile;
     private Path outputDir = Path.of(".").toAbsolutePath().normalize();
@@ -83,14 +88,17 @@ public class DecompilerGui extends JFrame {
             }
             gui.updatePath();
             gui.setVisible(true);
+            if (gui.inputFile != null) {
+                gui.analyze();
+            }
         });
     }
 
     public DecompilerGui() {
-        super("Java Decompiler");
+        super("Unflatten Decompiler");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setMinimumSize(new Dimension(720, 640));
-        setSize(820, 780);
+        setMinimumSize(new Dimension(980, 700));
+        setSize(1150, 860);
         setLocationRelativeTo(null);
         getContentPane().setBackground(BG);
 
@@ -113,17 +121,23 @@ public class DecompilerGui extends JFrame {
         p.setBackground(BG);
         JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
         left.setBackground(BG);
-        JLabel logo = new JLabel("JD");
-        logo.setForeground(Color.WHITE);
-        logo.setFont(logo.getFont().deriveFont(Font.BOLD, 18f));
-        logo.setHorizontalAlignment(SwingConstants.CENTER);
-        logo.setOpaque(true);
-        logo.setBackground(ACCENT);
-        logo.setPreferredSize(new Dimension(38, 38));
-        JLabel title = new JLabel("Java Decompiler");
+        JLabel logo = new JLabel();
+        ImageIcon icon = loadLogo(38);
+        if (icon != null) {
+            logo.setIcon(icon);
+        } else {
+            logo.setText("UD");
+            logo.setForeground(Color.WHITE);
+            logo.setFont(logo.getFont().deriveFont(Font.BOLD, 16f));
+            logo.setHorizontalAlignment(SwingConstants.CENTER);
+            logo.setOpaque(true);
+            logo.setBackground(ACCENT);
+            logo.setPreferredSize(new Dimension(38, 38));
+        }
+        JLabel title = new JLabel("Unflatten Decompiler");
         title.setForeground(TEXT);
         title.setFont(title.getFont().deriveFont(Font.BOLD, 19f));
-        JLabel sub = new JLabel("этап 1-2 · структура классов");
+        JLabel sub = new JLabel("декомпилятор jar-файлов");
         sub.setForeground(MUTED);
         sub.setFont(sub.getFont().deriveFont(13f));
         left.add(logo);
@@ -135,6 +149,19 @@ public class DecompilerGui extends JFrame {
         ver.setFont(ver.getFont().deriveFont(12f));
         p.add(ver, BorderLayout.EAST);
         return p;
+    }
+
+    /** Логотип из ресурсов jar (тот же, что в лоадере). */
+    private static ImageIcon loadLogo(int size) {
+        try (java.io.InputStream in = DecompilerGui.class.getResourceAsStream("/logo.png")) {
+            if (in == null) return null;
+            java.awt.image.BufferedImage src = javax.imageio.ImageIO.read(in);
+            if (src == null) return null;
+            java.awt.Image scaled = src.getScaledInstance(size, size, java.awt.Image.SCALE_SMOOTH);
+            return new ImageIcon(scaled);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private JComponent body() {
@@ -171,16 +198,6 @@ public class DecompilerGui extends JFrame {
         pathLabel.setBorder(new EmptyBorder(6, 0, 0, 0));
         card.add(pathLabel, BorderLayout.CENTER);
 
-        JPanel opts = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 8));
-        opts.setBackground(CARD);
-        for (JCheckBox cb : new JCheckBox[]{fieldsBox, methodsBox, countsBox, accessBox, interfacesBox}) {
-            cb.setForeground(TEXT);
-            cb.setOpaque(false);
-            cb.setFocusPainted(false);
-            cb.setFont(cb.getFont().deriveFont(13f));
-            opts.add(cb);
-        }
-        card.add(opts, BorderLayout.SOUTH);
         return card;
     }
 
@@ -194,7 +211,7 @@ public class DecompilerGui extends JFrame {
         top.add(section("ЖУРНАЛ"), BorderLayout.WEST);
         JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
         btns.setBackground(CARD);
-        btns.add(cfgBtn);
+        btns.add(openBtn);
         btns.add(saveBtn);
         btns.add(clearBtn);
         top.add(btns, BorderLayout.EAST);
@@ -252,15 +269,15 @@ public class DecompilerGui extends JFrame {
 
     private void wire() {
         chooseBtn.addActionListener(e -> chooseFile());
-        runBtn.addActionListener(e -> start());
+        runBtn.addActionListener(e -> analyze());
         clearBtn.addActionListener(e -> {
             log.setText("");
             status.setForeground(MUTED);
             status.setText("Готов");
         });
-        saveBtn.addActionListener(e -> saveOutput());
-        cfgBtn.addActionListener(e -> showCfg());
-        ssaBtn.addActionListener(e -> showSsa());
+        saveBtn.addActionListener(e -> saveReport());
+        openBtn.addActionListener(e -> openOutDir());
+        openBtn.setEnabled(false);
         setDropTarget(new DropTarget() {
             @Override
             public void drop(DropTargetDropEvent e) {
@@ -270,13 +287,14 @@ public class DecompilerGui extends JFrame {
                     if (!t.isDataFlavorSupported(DataFlavor.javaFileListFlavor)) return;
                     Object data = t.getTransferData(DataFlavor.javaFileListFlavor);
                     if (data instanceof List<?> list && !list.isEmpty() && list.get(0) instanceof File f
-                            && f.isFile() && f.getName().endsWith(".jar")) {
+                            && f.isFile() && f.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".jar")) {
                         inputFile = f;
                         updatePath();
+                        analyze();
                     }
                 } catch (Exception ignored) {
                 } finally {
-                    e.dropComplete(false);
+                    e.dropComplete(true);
                 }
             }
         });
@@ -288,6 +306,7 @@ public class DecompilerGui extends JFrame {
         if (fc.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
             inputFile = fc.getSelectedFile();
             updatePath();
+            analyze();
         }
     }
 
@@ -301,45 +320,81 @@ public class DecompilerGui extends JFrame {
         }
     }
 
-    /** Собирает текущие настройки вывода. */
+    /** Настройки вывода структуры (галочки убраны — включено всё нужное). */
     private ClassStructureDumper.Options currentOptions() {
         ClassStructureDumper.Options o = new ClassStructureDumper.Options();
-        o.fields = fieldsBox.isSelected();
-        o.methods = methodsBox.isSelected();
-        o.methodCounts = countsBox.isSelected();
-        o.accessFlags = accessBox.isSelected();
-        o.showInterfaces = interfacesBox.isSelected();
+        o.fields = true;
+        o.methods = true;
+        o.methodCounts = true;
+        o.accessFlags = false;
+        o.showInterfaces = true;
         return o;
     }
 
-    private void start() {
+    /** Полный конвейер: профиль → дешифратор → переименование → Java → ключи. */
+    private void analyze() {
         if (inputFile == null) {
-            JOptionPane.showMessageDialog(this, "Сначала выбери jar", "Нет файла", JOptionPane.WARNING_MESSAGE);
+            JOptionPane.showMessageDialog(this, "Сначала перетащи jar", "Нет файла", JOptionPane.WARNING_MESSAGE);
             return;
         }
         final File src = inputFile;
         final Path jarPath = src.toPath();
-        final AtomicInteger classCount = new AtomicInteger();
-        final ClassStructureDumper.Options opts = currentOptions();
         final long started = System.currentTimeMillis();
 
         progress.setVisible(true);
         status.setForeground(MUTED);
-        status.setText("Обработка…");
+        status.setText("Разбираю…");
         runBtn.setEnabled(false);
-        log.append("\n--- Разбор " + src.getName() + " ---\n");
+        openBtn.setEnabled(false);
+        log.append("\n===== " + src.getName() + " =====\n");
+
+        final StringBuilder report = new StringBuilder();
 
         new SwingWorker<Void, String>() {
-            private String result = "";
+            private String outDirText = "";
+            private int classes = 0;
+            private int errors = 0;
 
             @Override
-            protected Void doInBackground() throws Exception {
-                ClassStructureDumper dumper = new ClassStructureDumper(opts);
-                JarParser.parse(jarPath, (p, entry, node) -> {
-                    dumper.dump(p, entry, node);
-                    classCount.incrementAndGet();
-                });
-                result = dumper.result();
+            protected Void doInBackground() {
+                try {
+                    try {
+                        var prof = decompiler.ast.ObfuscationDetector.analyze(jarPath);
+                        publish(prof.summary().trim());
+                    } catch (Exception ex) {
+                        publish("детектор обфускации: " + ex);
+                    }
+
+                    StringDecryptor decryptor = buildDecryptor(jarPath);
+                    publish(decryptor != null
+                            ? "строки: ключ найден, расшифровываю"
+                            : "строки: ключ не найден, оставляю как есть");
+
+                    try {
+                        ClassRenamer.build(jarPath, decryptor);
+                    } catch (Exception ex) {
+                        publish("переименование классов: " + ex);
+                    }
+
+                    ClassHierarchy hierarchy = null;
+                    try {
+                        hierarchy = ClassHierarchy.fromJar(jarPath);
+                    } catch (Exception ignored) {
+                    }
+
+                    Path outDir = src.toPath().toAbsolutePath().getParent()
+                            .resolve(stripJar(src.getName()) + "-decompiled");
+                    var res = JavaExporter.export(jarPath, outDir, decryptor, hierarchy);
+                    classes = res.classes;
+                    errors = res.errors;
+                    outDirText = res.outDir.toString();
+                    publish("исходники: " + classes + " классов → " + outDirText
+                            + (errors > 0 ? " (ошибок: " + errors + ")" : ""));
+
+                    publish(scanKeys(jarPath, decryptor));
+                } catch (Exception ex) {
+                    publish("!!! " + ex);
+                }
                 return null;
             }
 
@@ -347,6 +402,7 @@ public class DecompilerGui extends JFrame {
             protected void process(List<String> chunks) {
                 for (String s : chunks) {
                     log.append(s + "\n");
+                    report.append(s).append("\n");
                 }
                 log.setCaretPosition(log.getDocument().getLength());
             }
@@ -356,28 +412,107 @@ public class DecompilerGui extends JFrame {
                 progress.setVisible(false);
                 runBtn.setEnabled(true);
                 double secs = (System.currentTimeMillis() - started) / 1000.0;
-                try {
-                    get();
-                    // Показываем только начало в журнал, весь дамп доступен кнопкой «Сохранить».
-                    log.append(String.format(">>> Классов разобрано: %d за %.1f с%n", classCount.get(), secs));
-                    if (classCount.get() > 0) {
-                        int preview = Math.min(4000, result.length());
-                        log.append("\n" + result.substring(0, preview) + "\n");
-                        if (result.length() > preview) {
-                            log.append("... (ещё " + (result.length() - preview) + " символов)\n");
-                        }
-                    }
+                if (!outDirText.isEmpty()) {
+                    lastOutDir = Path.of(outDirText);
+                    openBtn.setEnabled(true);
                     status.setForeground(GOOD);
-                    status.setText(String.format("Готово: %d классов за %.1f с", classCount.get(), secs));
-                    lastResult = result;
-                } catch (Exception e) {
-                    Throwable cause = e.getCause() != null ? e.getCause() : e;
+                    status.setText(String.format("Готово: %d классов за %.1f с", classes, secs));
+                } else {
                     status.setForeground(BAD);
-                    status.setText("Ошибка");
-                    log.append("\n!!! " + cause + "\n");
+                    status.setText("Не удалось разобрать");
                 }
+                report.append(String.format("время: %.1f с%n", secs));
+                lastResult = report.toString();
             }
         }.execute();
+    }
+
+    private static String stripJar(String name) {
+        return name.replaceAll("(?i)\\.jar$", "");
+    }
+
+    /** Ищет ключ: нативный мастер-секрет → вшитый секрет в байткоде. */
+    private static StringDecryptor buildDecryptor(Path jar) {
+        try {
+            NativeKeyExtractor.Result found = NativeKeyExtractor.discover(jar);
+            if (found != null) return found.decryptor();
+        } catch (Exception ignored) {
+        }
+        try {
+            byte[] embedded = EmbeddedSecretFinder.findSecret(jar);
+            if (embedded != null) {
+                StringDecryptor d = new StringDecryptor(embedded);
+                d.load(findDatResource(jar));
+                return d;
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    /** Таблица строк *.dat (magic 0x53565342) из jar. */
+    private static byte[] findDatResource(Path jar) throws Exception {
+        try (var zf = new java.util.jar.JarFile(jar.toFile())) {
+            var en = zf.entries();
+            while (en.hasMoreElements()) {
+                var e = en.nextElement();
+                if (e.isDirectory() || !e.getName().endsWith(".dat")
+                        || e.getName().startsWith("META-INF")) continue;
+                byte[] data = zf.getInputStream(e).readAllBytes();
+                if (data.length >= 4) {
+                    int magic = ((data[0] & 0xff) << 24) | ((data[1] & 0xff) << 16)
+                            | ((data[2] & 0xff) << 8) | (data[3] & 0xff);
+                    if (magic == 0x53565342) return data;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Ищет в постоянных строках секреты и ключи, похожие на лицензионные. */
+    private static String scanKeys(Path jar, StringDecryptor decryptor) {
+        final Pattern licenseKey = Pattern.compile("^[A-Z0-9]{4}(-[A-Z0-9]{4}){3,}$");
+        final Pattern hexKey = Pattern.compile("^[0-9a-fA-F]{32,}$");
+        final Pattern b64Key = Pattern.compile("^[A-Za-z0-9+/]{24,}={0,2}$");
+        final Set<String> hits = new LinkedHashSet<>();
+        try {
+            JarParser.parse(jar, (p, entry, cn) -> {
+                if (cn.fields != null) {
+                    for (FieldNode f : cn.fields) {
+                        if (f.value instanceof String s) addKeyLike(s, hits, licenseKey, hexKey, b64Key, entry);
+                    }
+                }
+                if (cn.methods != null) {
+                    for (MethodNode m : cn.methods) {
+                        if (m.instructions == null) continue;
+                        for (AbstractInsnNode ins : m.instructions) {
+                            if (ins instanceof LdcInsnNode ldc && ldc.cst instanceof String s) {
+                                addKeyLike(s, hits, licenseKey, hexKey, b64Key, entry);
+                            }
+                        }
+                    }
+                }
+            });
+        } catch (Exception ignored) {
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("ключи и секреты в строках: ").append(hits.size()).append("\n");
+        int shown = 0;
+        for (String h : hits) {
+            if (shown++ >= 40) { sb.append("… (ещё ").append(hits.size() - 40).append(")\n"); break; }
+            sb.append("  ").append(h);
+        }
+        return sb.toString().trim();
+    }
+
+    private static void addKeyLike(String s, Set<String> hits, Pattern licenseKey,
+                                   Pattern hexKey, Pattern b64Key, String entry) {
+        if (s == null) return;
+        String t = s.trim();
+        if (t.length() < 12 || t.length() > 200) return;
+        if (licenseKey.matcher(t).matches() || hexKey.matcher(t).matches() || b64Key.matcher(t).matches()) {
+            hits.add(t + "   [" + entry + "]");
+        }
     }
 
     private String lastResult = "";
@@ -508,16 +643,16 @@ public class DecompilerGui extends JFrame {
         }.execute();
     }
 
-    private void saveOutput() {
+    private void saveReport() {
         if (lastResult.isEmpty()) {
             JOptionPane.showMessageDialog(this, "Сначала разбери jar", "Нет результата",
                     JOptionPane.INFORMATION_MESSAGE);
             return;
         }
         JFileChooser fc = new JFileChooser(outputDir.toFile());
-        fc.setDialogTitle("Сохранить дамп");
+        fc.setDialogTitle("Сохранить отчёт");
         String base = inputFile != null ? inputFile.getName().replaceAll("(?i)\\.jar$", "") : "decompile";
-        fc.setSelectedFile(new File(base + "-structure.txt"));
+        fc.setSelectedFile(new File(base + "-report.txt"));
         if (fc.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
             File f = fc.getSelectedFile();
             if (!f.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".txt")) {
@@ -532,6 +667,21 @@ public class DecompilerGui extends JFrame {
                 status.setForeground(BAD);
                 status.setText("Не удалось сохранить");
             }
+        }
+    }
+
+    /** Открывает папку с декомпилированными исходниками. */
+    private void openOutDir() {
+        if (lastOutDir == null) return;
+        try {
+            if (Desktop.isDesktopSupported()) {
+                Desktop.getDesktop().open(lastOutDir.toFile());
+            } else {
+                status.setText("Папка: " + lastOutDir);
+            }
+        } catch (Exception ex) {
+            status.setForeground(BAD);
+            status.setText("Не удалось открыть папку");
         }
     }
 
